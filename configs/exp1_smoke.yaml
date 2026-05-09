@@ -1,0 +1,65 @@
+defaults:
+  - exp1/paths
+  - exp1/render
+  - exp1/tasks
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.project_root}/outputs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+experiment:
+  name: exp1_smoke
+  seed: 7
+  description: Tiny safe Experiment 1 pipeline check.
+
+assets:
+  max_objects: 3
+
+render:
+  resolution: [128, 128]
+  samples: 16
+  chunk_size: 32
+
+camera_grid:
+  distances: [2.4, 2.8]
+  azimuths_deg: [0.0]
+  elevations_deg: [20.0]
+
+lighting_grid:
+  azimuths_deg: [45.0]
+  elevations_deg: [35.0]
+  intensities: [3.0]
+
+scale_grid:
+  values: [1.0]
+
+models:
+  enabled: ["clip_vit_b16"]
+  layers: ["final"]
+
+features:
+  batch_size: 8
+  num_workers: 0
+
+tasks:
+  enabled: ["surface_normal_aggregate"]
+
+probe:
+  epochs: 3
+  batch_size: 16
+  early_stopping:
+    enabled: false
+    patience: 1
+    min_delta: 0.0
+  evaluation:
+    within_texture: true
+    cross_texture: false
+    bootstrap:
+      enabled: false
+      unit: object_id
+      n_resamples: 100
+      seed: ${experiment.seed}
+
+train:
+  limit_samples: null

@@ -1,0 +1,124 @@
+# @package _global_
+
+models:
+  enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
+  layers: ["final", "layer4", "layer8", "layer12"]
+  definitions:
+    clip_vit_b16:
+      family: clip
+      model_id: openai/clip-vit-base-patch16
+      image_size: 224
+      use_open_clip: false
+      open_clip_model: ViT-B-16
+      open_clip_pretrained: laion2b_s34b_b88k
+      supported_layers: ["final", "layer4", "layer8", "layer12"]
+    clip_vit_l14:
+      family: clip
+      model_id: openai/clip-vit-large-patch14
+      image_size: 224
+      use_open_clip: false
+      open_clip_model: ViT-L-14
+      open_clip_pretrained: laion2b_s32b_b82k
+      supported_layers: ["final", "layer4", "layer8", "layer12"]
+    dinov2_vit_b:
+      family: dino
+      hub_name: dinov2_vitb14
+      image_size: 518
+      supported_layers: ["final", "layer4", "layer8", "layer12"]
+    dinov2_vit_l:
+      family: dino
+      hub_name: dinov2_vitl14
+      image_size: 518
+      supported_layers: ["final", "layer4", "layer8", "layer12"]
+
+features:
+  token: cls
+  batch_size: 32
+  num_workers: 4
+  device: cuda
+  normalize: true
+  use_random_augmentations: false
+  cache_format: npz
+
+tasks:
+  enabled: ["surface_normal_aggregate", "relative_depth_regions"]
+  definitions:
+    surface_normal_aggregate:
+      type: regression
+      target_columns: ["mean_normal_x", "mean_normal_y", "mean_normal_z"]
+      label_path: ${paths.labels_dir}/labels_surface_normal_aggregate.parquet
+      metric: angular_error_deg
+      min_valid_pixels: 64
+    relative_depth_regions:
+      type: multi_label_binary
+      label_path: ${paths.labels_dir}/labels_relative_depth_regions.parquet
+      metric: valid_pair_accuracy
+      balanced_metric: balanced_accuracy
+      grid_size: [3, 3]
+      depth_statistic: median
+      min_valid_fraction_per_region: 0.25
+      min_depth_margin: 0.02
+      region_pairs:
+        - [0, 1]
+        - [1, 2]
+        - [3, 4]
+        - [4, 5]
+        - [6, 7]
+        - [7, 8]
+        - [0, 3]
+        - [3, 6]
+        - [1, 4]
+        - [4, 7]
+        - [2, 5]
+        - [5, 8]
+    camera_distance:
+      type: regression
+      target: log_camera_distance
+      metric: mae
+      enabled_in_full: true
+    viewpoint:
+      type: regression
+      targets: ["azimuth_sin", "azimuth_cos", "elevation_sin", "elevation_cos"]
+      metric: angular_error_deg
+      enabled_in_full: true
+    lighting_direction:
+      type: regression
+      targets: ["light_dir_x", "light_dir_y", "light_dir_z"]
+      metric: angular_error_deg
+      enabled_in_full: true
+    lighting_intensity:
+      type: regression
+      target: log_light_intensity
+      metric: mae
+      enabled_in_full: true
+    apparent_scale:
+      type: regression
+      targets: ["object_scale", "foreground_area_fraction"]
+      metric: mae
+      enabled_in_full: true
+
+probe:
+  head: linear
+  use_layernorm: true
+  lr: 1e-3
+  weight_decay: 1e-4
+  epochs: 30
+  batch_size: 128
+  val_metric: auto
+  seed: ${experiment.seed}
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.0
+  losses:
+    surface_normal_aggregate: cosine
+    relative_depth_regions: bce_with_logits
+    regression_default: mse
+  evaluation:
+    within_texture: true
+    cross_texture: true
+    bootstrap:
+      enabled: true
+      unit: object_id
+      n_resamples: 1000
+      seed: ${experiment.seed}

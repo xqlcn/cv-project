@@ -1,0 +1,57 @@
+# @package _global_
+
+paths:
+  project_root: ${oc.env:CV_PROJECT_ROOT,.}
+  exp1_root: ${paths.project_root}/data/exp1
+  asset_manifest: ${paths.exp1_root}/manifests/assets.jsonl
+  normalized_asset_manifest: ${paths.exp1_root}/manifests/assets_normalized.jsonl
+  render_plan: ${paths.exp1_root}/manifests/render_plan.parquet
+  render_plan_jsonl: ${paths.exp1_root}/manifests/render_plan.jsonl
+  render_chunks_dir: ${paths.exp1_root}/manifests/render_chunks
+  render_root: ${paths.exp1_root}/renders
+  labels_dir: ${paths.exp1_root}/labels
+  feature_dir: ${paths.exp1_root}/features
+  probe_output_dir: ${paths.project_root}/outputs/exp1/probes
+  results_dir: ${paths.project_root}/outputs/exp1/results
+  figures_dir: ${paths.project_root}/outputs/exp1/figures
+  logs_dir: ${paths.project_root}/outputs/exp1/logs
+
+assets:
+  # Early tasks can use the synthetic primitive catalog already produced by
+  # scripts/setup_synthetic_primitives.py; later tasks can add ShapeNet or
+  # Objaverse sources here without changing downstream configs.
+  sources:
+    - name: synthetic_primitives
+      type: synthetic_manifest
+      manifest_path: ${paths.project_root}/data/synthetic_primitives/catalog.json
+      source_dataset: synthetic_primitives
+      object_id_key: object_id
+      category_key: category
+      split_key: split
+      mesh_path_key: mesh_path
+      raw_mesh_path_key: mesh_path
+      normalized_mesh_path_key: mesh_path
+      enabled: true
+    - name: shapenet
+      type: mesh_directory
+      root: null
+      source_dataset: shapenet
+      enabled: false
+    - name: objaverse
+      type: mesh_directory
+      root: null
+      source_dataset: objaverse
+      enabled: false
+  allowed_extensions: [".obj", ".glb", ".gltf", ".fbx", ".ply", ".off"]
+  max_objects: null
+  require_normalized_mesh: false
+  split_from_manifest: true
+
+splits:
+  object_disjoint: true
+  seed: ${experiment.seed}
+  labels: ["train", "val", "test"]
+  fractions:
+    train: 0.7
+    val: 0.15
+    test: 0.15
