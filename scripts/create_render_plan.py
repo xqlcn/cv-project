@@ -6,67 +6,18 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, cast
-
-from omegaconf import DictConfig, OmegaConf
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
 from exp1.metadata.manifest import save_manifest
 from exp1.rendering.grid import build_render_plan_from_config, load_asset_manifest
 
 
-def _default_config_path() -> Path:
-    return PROJECT_ROOT / "configs" / "exp1_smoke.yaml"
-
-
-def _load_exp1_config(path: Path) -> DictConfig:
-    """Load the small Experiment 1 defaults stack without requiring Hydra runtime."""
-    OmegaConf.register_new_resolver("now", lambda fmt: "now", replace=True)
-    cfg_dir = path.resolve().parent
-    raw_cfg = OmegaConf.load(path)
-    if not OmegaConf.is_dict(raw_cfg):
-        raise TypeError(
-            f"Expected mapping config at {path}, got {type(raw_cfg).__name__}"
-        )
-    cfg = cast(DictConfig, raw_cfg)
-    defaults_node = OmegaConf.select(cfg, "defaults", default=[])
-    defaults = list(defaults_node) if defaults_node is not None else []
-    parts: List[Any] = []
-
-    for entry in defaults:
-        if entry == "_self_":
-            continue
-        if isinstance(entry, str):
-            parts.append(OmegaConf.load(cfg_dir / f"{entry}.yaml"))
-        elif isinstance(entry, dict):
-            for group, name in entry.items():
-                if name in {None, "null"}:
-                    continue
-                parts.append(OmegaConf.load(cfg_dir / str(group) / f"{name}.yaml"))
-        else:
-            raise TypeError(f"Unsupported defaults entry in {path}: {entry!r}")
-
-    parts.append(cfg)
-    merged = OmegaConf.merge(*parts)
-    if not OmegaConf.is_dict(merged):
-        raise TypeError(
-            f"Merged config is not a mapping for {path}: {type(merged).__name__}"
-        )
-    OmegaConf.resolve(merged)
-    return cast(DictConfig, merged)
-
-
-def _resolve_path(project_root: Path, path: Optional[str]) -> Optional[Path]:
-    if path is None:
-        return None
-    out = Path(path)
-    return out if out.is_absolute() else project_root / out
-
-
-def _first_enabled_manifest(cfg: DictConfig) -> Path:
+def _first_enabled_manifest(cfg) -> Path:
     for source in cfg.assets.sources:
         has_manifest = source.get("manifest_path") is not None
         if bool(source.get("enabled", False)) and has_manifest:
@@ -76,7 +27,7 @@ def _first_enabled_manifest(cfg: DictConfig) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=_default_config_path())
+    parser.add_argument("--config", type=Path, default=default_exp1_config_path())
     parser.add_argument(
         "--asset-manifest",
         type=Path,
@@ -100,11 +51,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = _load_exp1_config(args.config)
+    cfg = load_exp1_config(args.config)
     project_root = Path(str(cfg.paths.project_root)).expanduser().resolve()
 
     asset_manifest = args.asset_manifest or _first_enabled_manifest(cfg)
-    asset_manifest = _resolve_path(project_root, str(asset_manifest))
+    asset_manifest = resolve_path(project_root, str(asset_manifest))
     if asset_manifest is None or not asset_manifest.is_file():
         raise FileNotFoundError(
             f"Missing asset manifest: {asset_manifest}. "
@@ -114,7 +65,7 @@ def main() -> None:
     output = args.output
     if output is None:
         output = Path(str(cfg.paths.render_plan_jsonl))
-    output = _resolve_path(project_root, str(output))
+    output = resolve_path(project_root, str(output))
     assert output is not None
 
     asset_rows = load_asset_manifest(asset_manifest)

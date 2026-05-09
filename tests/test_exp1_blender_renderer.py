@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import json
+import py_compile
+import shutil
+import subprocess
+import sys
+import builtins
+from pathlib import Path
+
+import numpy as np
+import pytest
+import trimesh
+
+from exp1.rendering.materials import material_mode
+from scripts import render_blender
+from src.utils.io import read_jsonl
+
+
+def test_render_blender_script_compiles() -> None:
+    py_compile.compile(
+        "scripts/render_blender.py",
+        cfile="/tmp/render_blender_test.pyc",
+        doraise=True,
+    )
+
+
+def test_render_blender_help_works_without_blender() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/render_blender.py", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "--chunk" in result.stdout
+
+
+def test_render_blender_config_loads_without_pyyaml(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ImportError("No module named 'yaml'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    cfg = render_blender._load_config(
+        Path("configs/exp1_smoke.yaml"),
+        Path.cwd(),
+    )
+
+    assert cfg["render"]["resolution"] == [128, 128]
+    assert cfg["render"]["samples"] == 16
+    assert cfg["textures"]["flat"]["color_rgb"] == [0.62, 0.62, 0.62]
+
+
+def test_random_noise_material_mode_maps_to_existing_helper() -> None:
+    assert material_mode("random_noise") == "noise"
+    assert material_mode("flat") == "flat"
+
+
+def test_blender_renderer_outputs_geometry_buffers(tmp_path) -> None:
+    blender = shutil.which("blender")
+    if blender is None:
+        pytest.skip("Blender is not available on PATH")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    mesh_path = tmp_path / "box.obj"
+    trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(mesh_path)
+
+    out_dir = tmp_path / "render"
+    record = {
+        "render_id": "toy_box_flat",
+        "object_id": "toy_box",
+        "source_dataset": "unit",
+        "category": "box",
+        "split": "train",
+        "raw_mesh_path": str(mesh_path),
+        "normalized_mesh_path": str(mesh_path),
+        "texture_condition": "flat",
+        "texture_seed": 0,
+        "camera_distance": 2.4,
+        "camera_azimuth_deg": 0.0,
+        "camera_elevation_deg": 20.0,
+        "camera_fov_deg": 50.0,
+        "object_scale": 1.0,
+        "light_type": "sun",
+        "light_azimuth_deg": 45.0,
+        "light_elevation_deg": 35.0,
+        "light_intensity": 3.0,
+        "render_seed": 7,
+        "rgb_path": str(out_dir / "rgb.png"),
+        "depth_path": str(out_dir / "depth.npy"),
+        "normal_path": str(out_dir / "normal_camera.npy"),
+        "mask_path": str(out_dir / "mask.npy"),
+        "render_status": "pending",
+        "qc_error_message": "",
+    }
+    chunk = tmp_path / "chunk.jsonl"
+    chunk.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    status = tmp_path / "status.jsonl"
+    config = tmp_path / "render.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "render:",
+                "  engine: CYCLES",
+                "  resolution: [32, 32]",
+                "  samples: 1",
+                "  use_gpu: false",
+                "  transparent_background: false",
+                "  file_format: PNG",
+                "  camera:",
+                "    clip_start: 0.01",
+                "    clip_end: 1000.0",
+                "  world:",
+                "    bg_color: [0.05, 0.05, 0.06, 1.0]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            blender,
+            "--background",
+            "--python",
+            "scripts/render_blender.py",
+            "--",
+            "--config",
+            str(config),
+            "--chunk",
+            str(chunk),
+            "--status-output",
+            str(status),
+            "--project-root",
+            str(repo_root),
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+
+    status_rows = read_jsonl(status)
+    assert status_rows[0]["render_status"] == "success"
+    assert (out_dir / "rgb.png").is_file()
+    assert (out_dir / "render_meta.json").is_file()
+    assert np.load(out_dir / "depth.npy").shape == (32, 32)
+    assert np.load(out_dir / "normal_camera.npy").shape == (32, 32, 3)
+    assert np.load(out_dir / "mask.npy").shape == (32, 32)

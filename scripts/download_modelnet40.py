@@ -16,12 +16,13 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+
+from normalize_modelnet40_layout import normalize_modelnet40_root
 
 
 DEFAULT_URL = "http://modelnet.cs.princeton.edu/ModelNet40.zip"
@@ -60,18 +61,6 @@ def _download(url: str, dest_zip: Path) -> None:
         raise SystemExit(1) from exc
 
 
-def _normalize_after_extract(extract_to: Path) -> None:
-    """Princeton ZIP uses ModelNet40/<category>/train|test/, not train/<category>/."""
-    norm_path = Path(__file__).resolve().parent / "normalize_modelnet40_layout.py"
-    spec = importlib.util.spec_from_file_location("normalize_modelnet40_layout", norm_path)
-    if spec is None or spec.loader is None:
-        print(f"Warning: could not load {norm_path}", file=sys.stderr)
-        return
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.normalize_modelnet40_root(extract_to)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download ModelNet40 to data/modelnet40/")
     parser.add_argument("--url", default=DEFAULT_URL, help="ZIP URL")
@@ -103,7 +92,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(out)
-    _normalize_after_extract(out)
+    normalize_modelnet40_root(out)
 
     if not args.keep_zip:
         zip_path.unlink(missing_ok=True)

@@ -16,6 +16,7 @@ tqdm>=4.66.0
 scikit-learn>=1.3.0
 matplotlib>=3.8.0
 pandas>=2.0.0
+pyarrow>=14.0.0
 
 # Mesh loading + offscreen rendering (ModelNet40 / synthetic pipeline)
 trimesh>=4.0.0

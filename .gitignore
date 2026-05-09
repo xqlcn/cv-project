@@ -135,3 +135,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+AGENTS.md
+EXPERIMENT1_HANDOFF.md
+EXPERIMENT1_TASKS.md

@@ -5,6 +5,7 @@ paths:
   exp1_root: ${paths.project_root}/data/exp1
   asset_manifest: ${paths.exp1_root}/manifests/assets.jsonl
   normalized_asset_manifest: ${paths.exp1_root}/manifests/assets_normalized.jsonl
+  split_manifest: ${paths.exp1_root}/manifests/object_splits.jsonl
   render_plan: ${paths.exp1_root}/manifests/render_plan.parquet
   render_plan_jsonl: ${paths.exp1_root}/manifests/render_plan.jsonl
   render_chunks_dir: ${paths.exp1_root}/manifests/render_chunks
@@ -32,6 +33,11 @@ assets:
       raw_mesh_path_key: mesh_path
       normalized_mesh_path_key: mesh_path
       enabled: true
+    - name: modelnet40
+      type: modelnet40
+      root: ${paths.project_root}/data/modelnet40
+      source_dataset: modelnet40
+      enabled: false
     - name: shapenet
       type: mesh_directory
       root: null
