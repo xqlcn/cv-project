@@ -48,6 +48,14 @@ Automatic (may fail if the server blocks bots; then use manual steps printed by 
 python scripts/download_modelnet40.py
 ```
 
+The Princeton ZIP unpacks as `ModelNet40/<category>/train|test/`; the download script (or the command below) flattens that to `train/<category>/` and `test/<category>/`.
+
+If you unzipped by hand and still see a `ModelNet40` folder inside `data/modelnet40/`:
+
+```bash
+python scripts/normalize_modelnet40_layout.py
+```
+
 Manual fallback:
 
 1. Open [https://modelnet.cs.princeton.edu/](https://modelnet.cs.princeton.edu/) and download **ModelNet40.zip**.
@@ -104,6 +112,66 @@ ds = RenderedSyntheticPrimitiveDataset(
     render_cfg=RenderConfig(image_size=(224, 224), n_views=8, seed=0),
 )
 sample = ds[0]  # keys: mesh_path, category, split, view_id, rgb, depth, normal, ...
+```
+
+## ModelNet40 End-To-End (your 10 steps)
+
+Preprocessing + probing pipeline commands:
+
+```bash
+# Step 1-8 (scan, load .off, triangulate, center, scale, fix normals, render 16 views, save metadata)
+python scripts/preprocess_modelnet40.py --root data/modelnet40 --split train --n-views 16 --image-size 224
+
+# Step 9 (frozen CLIP extraction)
+python -m src.training.extract_features --config-name=modelnet_clip
+
+# Step 10 (linear probe on category_id labels)
+python -m src.training.train_modelnet_probe --config-name=modelnet_clip
+```
+
+Or run all three with:
+
+```bash
+bash scripts/run_modelnet_pipeline.sh
+```
+
+## Experiment 2B: Viewpoint probe (azimuth first)
+
+1) If your processed metadata was generated before azimuth/elevation and vis paths were added, backfill once:
+
+```bash
+python scripts/backfill_viewpoint_metadata.py --metadata data/processed/modelnet40/metadata/modelnet40_views.jsonl --n-views 16 --seed 42
+```
+
+2) Extract frozen CLIP features for your chosen modality:
+
+```bash
+# RGB
+python -m src.training.extract_features --config-name=modelnet_viewpoint_clip
+
+# Depth visualization
+python -m src.training.extract_features --config-name=modelnet_viewpoint_clip \
+  features.input_path_key=depth_vis_path \
+  paths.feature_dir=data/features/modelnet40_viewpoint_clip_depth \
+  paths.output_dir=outputs/probes/modelnet40_viewpoint_clip_depth
+
+# Normal visualization
+python -m src.training.extract_features --config-name=modelnet_viewpoint_clip \
+  features.input_path_key=normal_vis_path \
+  paths.feature_dir=data/features/modelnet40_viewpoint_clip_normal \
+  paths.output_dir=outputs/probes/modelnet40_viewpoint_clip_normal
+```
+
+3) Train azimuth probe (linear regression on sin/cos target; reports angular MAE in degrees):
+
+```bash
+# RGB
+python -m src.training.train_viewpoint_probe --config-name=modelnet_viewpoint_clip
+
+# Depth / normal: use matching feature_dir + output_dir overrides
+python -m src.training.train_viewpoint_probe --config-name=modelnet_viewpoint_clip \
+  paths.feature_dir=data/features/modelnet40_viewpoint_clip_depth \
+  paths.output_dir=outputs/probes/modelnet40_viewpoint_clip_depth
 ```
 
 **PyTorch3D:** not required. The active backend is **trimesh + pyrender** (`src/rendering/mesh_renderer.py`). Optional PyTorch3D hook lives in `src/rendering/pytorch3d_backend.py` (stub for you to implement if you install `pytorch3d`).

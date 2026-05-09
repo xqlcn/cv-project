@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +21,16 @@ from src.training.losses import probe_loss_binary
 from src.utils.io import ensure_dir
 from src.utils.metrics import binary_classification_metrics
 from src.utils.seed import seed_worker, set_seed
+
+
+def collate_xy(batch: List[Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]]):
+    xs = torch.stack([b[0] for b in batch], dim=0)
+    ys = torch.stack([b[1] for b in batch], dim=0)
+    return xs, ys
+
+
+def _worker_init_fn(worker_id: int, base_seed: int) -> None:
+    seed_worker(worker_id, base_seed)
 
 
 def _load_feature_index(path: Path) -> List[Dict[str, Any]]:
@@ -104,27 +115,23 @@ def main(cfg: DictConfig) -> None:
         weight_decay=float(cfg.probe.weight_decay),
     )
 
-    def collate(batch: List[Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]]):
-        xs = torch.stack([b[0] for b in batch], dim=0)
-        ys = torch.stack([b[1] for b in batch], dim=0)
-        return xs, ys
-
     g = torch.Generator()
     g.manual_seed(int(cfg.probe.seed))
+    worker_init = partial(_worker_init_fn, base_seed=int(cfg.probe.seed))
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg.features.batch_size),
         shuffle=True,
-        collate_fn=collate,
+        collate_fn=collate_xy,
         num_workers=int(cfg.features.num_workers),
-        worker_init_fn=lambda wid: seed_worker(wid, int(cfg.probe.seed)),
+        worker_init_fn=worker_init,
         generator=g,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=int(cfg.features.batch_size),
         shuffle=False,
-        collate_fn=collate,
+        collate_fn=collate_xy,
         num_workers=int(cfg.features.num_workers),
     )
 

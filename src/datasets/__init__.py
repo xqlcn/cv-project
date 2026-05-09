@@ -5,6 +5,8 @@ from src.datasets.modelnet40_dataset import (
     RenderedModelNetDataset,
     default_modelnet40_root,
     discover_modelnet40_records,
+    load_records_json,
+    save_records_json,
 )
 from src.datasets.rendered_mesh_dataset import RenderedMeshDataset, collate_rendered_batch
 from src.datasets.synthetic_primitives import (
@@ -24,5 +26,7 @@ __all__ = [
     "default_modelnet40_root",
     "default_synthetic_root",
     "discover_modelnet40_records",
+    "save_records_json",
+    "load_records_json",
     "build_synthetic_primitive_records",
 ]

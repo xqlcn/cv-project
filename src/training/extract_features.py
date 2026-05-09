@@ -49,8 +49,9 @@ def main(cfg: DictConfig) -> None:
 
     device = torch.device(cfg.features.device if torch.cuda.is_available() else "cpu")
     token = str(cfg.features.token)
+    input_key = str(OmegaConf.select(cfg, "features.input_path_key") or "render_path")
 
-    image_paths = [str(Path(row["render_path"]).resolve()) for r in rows]
+    image_paths = [str(Path(r[input_key]).resolve()) for r in rows]
 
     if cfg.backbone.family == "clip":
         ext = FrozenCLIPExtractor(
@@ -84,11 +85,11 @@ def main(cfg: DictConfig) -> None:
 
     index_out: List[Dict[str, Any]] = []
     for row in tqdm(rows, desc="save features"):
-        rp = str(Path(row["render_path"]).resolve())
+        rp = str(Path(row[input_key]).resolve())
         if rp not in feats:
             raise KeyError(f"No features for render_path={rp}")
         payload = feats[rp]
-        out_name = f"{Path(row['render_path']).stem}.pt"
+        out_name = f"{Path(row[input_key]).stem}.pt"
         out_path = feature_root / out_name
         torch.save(payload, out_path)
         merged = dict(row)

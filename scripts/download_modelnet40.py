@@ -16,6 +16,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import shutil
 import sys
 import urllib.error
@@ -60,16 +61,16 @@ def _download(url: str, dest_zip: Path) -> None:
         raise SystemExit(1) from exc
 
 
-def _flatten_if_needed(extract_to: Path) -> None:
-    """If zip contained a single top folder ``ModelNet40``, move children up to extract_to."""
-    if (extract_to / "train").is_dir() and (extract_to / "test").is_dir():
+def _normalize_after_extract(extract_to: Path) -> None:
+    """Princeton ZIP uses ModelNet40/<category>/train|test/, not train/<category>/."""
+    norm_path = Path(__file__).resolve().parent / "normalize_modelnet40_layout.py"
+    spec = importlib.util.spec_from_file_location("normalize_modelnet40_layout", norm_path)
+    if spec is None or spec.loader is None:
+        print(f"Warning: could not load {norm_path}", file=sys.stderr)
         return
-    subdirs = [p for p in extract_to.iterdir() if p.is_dir()]
-    if len(subdirs) == 1 and (subdirs[0] / "train").is_dir():
-        inner = subdirs[0]
-        for child in inner.iterdir():
-            shutil.move(str(child), str(extract_to / child.name))
-        inner.rmdir()
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.normalize_modelnet40_root(extract_to)
 
 
 def main() -> None:
@@ -103,7 +104,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(out)
-    _flatten_if_needed(out)
+    _normalize_after_extract(out)
 
     if not args.keep_zip:
         zip_path.unlink(missing_ok=True)
