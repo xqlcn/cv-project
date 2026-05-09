@@ -1,0 +1,9 @@
+[
+  {
+    "object_id": "example_0001",
+    "category": "placeholder",
+    "split": "train",
+    "dataset": "custom",
+    "mesh_path": "/absolute/path/to/mesh.obj"
+  }
+]

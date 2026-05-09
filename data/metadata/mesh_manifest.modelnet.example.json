@@ -1,0 +1,8 @@
+[
+  {
+    "object_id": "airplane_airplane_0627",
+    "category": "airplane",
+    "mesh_path": "/absolute/path/to/ModelNet40/airplane/airplane_0627.off",
+    "dataset": "modelnet40"
+  }
+]
