@@ -66,7 +66,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "textures": {
         "flat": {"color_rgb": [0.62, 0.62, 0.62]},
-        "photorealistic": {"fallback_color_rgb": [0.68, 0.68, 0.68]},
+        "photorealistic": {
+            "preserve_imported_materials": True,
+            "fallback_color_rgb": [0.68, 0.68, 0.68],
+            "textureless_source_datasets": ["modelnet40", "synthetic_primitives"],
+        },
+        "random_noise": {"scale_range": [8.0, 20.0], "detail": 6.0},
     },
     "lighting_grid": {"fill_intensity": 0.35},
 }
@@ -437,11 +442,11 @@ def _prepare_scene(
     bpy.context.view_layer.update()
 
     objects = _mesh_objects()
-    apply_materials(objects, record, cfg)
+    material_meta = apply_materials(objects, record, cfg)
     cam_obj = setup_camera(record, cfg)
     light_meta = setup_lighting(record, cfg)
     bpy.context.view_layer.update()
-    return cam_obj, light_meta
+    return cam_obj, light_meta, material_meta
 
 
 def _write_rgb(path: Path) -> None:
@@ -461,7 +466,7 @@ def render_record(
     for path in output_paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    cam_obj, light_meta = _prepare_scene(record, cfg, project_root)
+    cam_obj, light_meta, material_meta = _prepare_scene(record, cfg, project_root)
     _write_rgb(output_paths["rgb_path"])
 
     scene = bpy.context.scene
@@ -491,6 +496,7 @@ def render_record(
         "blender_version": bpy.app.version_string,
         "render_elapsed_sec": time.time() - start,
         "buffer_shapes": buffer_shapes(buffers),
+        **material_meta,
         **camera_metadata(cam_obj),
         **light_meta,
     }

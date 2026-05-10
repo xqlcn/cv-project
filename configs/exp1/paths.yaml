@@ -8,6 +8,9 @@ paths:
   split_manifest: ${paths.exp1_root}/manifests/object_splits.jsonl
   render_plan: ${paths.exp1_root}/manifests/render_plan.parquet
   render_plan_jsonl: ${paths.exp1_root}/manifests/render_plan.jsonl
+  render_qc_manifest: ${paths.exp1_root}/manifests/render_qc.parquet
+  valid_render_manifest: ${paths.exp1_root}/manifests/render_valid.parquet
+  contact_sheet: ${paths.exp1_root}/qc/contact_sheet.png
   render_chunks_dir: ${paths.exp1_root}/manifests/render_chunks
   render_root: ${paths.exp1_root}/renders
   labels_dir: ${paths.exp1_root}/labels

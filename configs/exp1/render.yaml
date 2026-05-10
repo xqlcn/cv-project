@@ -27,13 +27,17 @@ render:
     max_foreground_fraction: 0.95
     min_depth_valid_fraction: 0.9
     normal_norm_tolerance: 0.1
+    depth_atol: 0.0001
+    normal_atol: 0.0001
 
 textures:
   conditions: ["photorealistic", "flat", "random_noise"]
   photorealistic:
     preserve_imported_materials: true
     fallback_color_rgb: [0.68, 0.68, 0.68]
+    fallback_roughness: 0.55
     record_fallback_status: true
+    textureless_source_datasets: ["modelnet40", "synthetic_primitives"]
   flat:
     color_rgb: [0.62, 0.62, 0.62]
     roughness: 0.55
@@ -44,6 +48,9 @@ textures:
     texture_size: [256, 256]
     color_space: sRGB
     category_correlated: false
+    scale_range: [8.0, 20.0]
+    detail: 6.0
+    roughness: 0.55
 
 camera_grid:
   distances: [2.4]
