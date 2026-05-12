@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import importlib.util
 import json
 import py_compile
 import shutil
@@ -21,6 +22,17 @@ from exp1.rendering.materials import (
 )
 from scripts import render_blender
 from src.utils.io import read_jsonl
+
+
+def _load_material_utils_module():
+    repo_root = Path(__file__).resolve().parents[1]
+    module_path = repo_root / "blender" / "material_utils.py"
+    spec = importlib.util.spec_from_file_location("material_utils_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_render_blender_script_compiles() -> None:
@@ -167,6 +179,22 @@ def test_random_noise_material_uses_saved_image_texture(monkeypatch, tmp_path) -
     assert meta["random_texture_path"].endswith("random_texture.png")
     assert calls[0]["texture_type"] == "image_noise"
     assert calls[0]["image_texture_path"] == meta["random_texture_path"]
+
+
+def test_random_texture_png_writer_outputs_seeded_noise(tmp_path) -> None:
+    material_utils = _load_material_utils_module()
+    path = tmp_path / "random_texture.png"
+
+    pixels = material_utils._random_rgba_bytes(seed=123, width=16, height=16)
+    material_utils._write_rgba_png(path, width=16, height=16, pixels=pixels)
+
+    arr = np.asarray(Image.open(path))
+    assert arr.shape == (16, 16, 4)
+    assert arr[..., :3].max() > 0
+    assert np.all(arr[..., 3] == 255)
+    assert len(np.unique(arr[..., :3].reshape(-1, 3), axis=0)) > 1
+    assert material_utils._random_rgba_bytes(seed=123, width=16, height=16) == pixels
+    assert material_utils._random_rgba_bytes(seed=124, width=16, height=16) != pixels
 
 
 def test_blender_renderer_outputs_geometry_buffers(tmp_path) -> None:
@@ -376,3 +404,7 @@ def test_blender_material_triplet_preserves_geometry_buffers(tmp_path) -> None:
 
     assert not np.array_equal(rgbs["photorealistic"], rgbs["flat"])
     assert not np.array_equal(rgbs["flat"], rgbs["random_noise"])
+
+    random_texture = np.asarray(Image.open(tmp_path / "random_noise" / "random_texture.png"))
+    assert random_texture[..., :3].max() > 0
+    assert len(np.unique(random_texture[..., :3].reshape(-1, 3), axis=0)) > 1

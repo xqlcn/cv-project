@@ -29,7 +29,12 @@ from exp1.assets.validate import (
     validate_asset_manifest,
     write_object_split_manifest,
 )
-from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
+from exp1.config import (
+    default_exp1_config_path,
+    ensure_local_hf_home,
+    load_exp1_config,
+    resolve_path,
+)
 from src.utils.io import write_jsonl
 
 
@@ -404,6 +409,7 @@ def _discover_assets(args: argparse.Namespace, cfg: DictConfig) -> List[Dict[str
 def main() -> None:
     args = parse_args()
     cfg = load_exp1_config(args.config)
+    ensure_local_hf_home(cfg)
     project_root = Path(str(cfg.paths.project_root)).expanduser().resolve()
 
     raw_manifest = _path_from_cfg(

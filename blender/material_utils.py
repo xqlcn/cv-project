@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import random
+import struct
+import zlib
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-import bpy
+try:
+    import bpy
+except ImportError:
+    bpy = None
 
 
 GENERATED_MATERIAL_SUFFIXES = (
@@ -77,6 +82,47 @@ def _new_principled_material(
     return mat, principled, nodes, links
 
 
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    crc = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+
+def _random_rgba_bytes(*, seed: int, width: int, height: int) -> bytes:
+    rng = random.Random(int(seed))
+    pixels = bytearray()
+    for _ in range(int(width) * int(height)):
+        pixels.extend((rng.randrange(256), rng.randrange(256), rng.randrange(256), 255))
+    return bytes(pixels)
+
+
+def _write_rgba_png(
+    path: Path,
+    *,
+    width: int,
+    height: int,
+    pixels: bytes,
+) -> None:
+    row_stride = int(width) * 4
+    raw_rows = bytearray()
+    for row_idx in range(int(height)):
+        raw_rows.append(0)  # PNG filter type 0: no filtering.
+        start = row_idx * row_stride
+        raw_rows.extend(pixels[start : start + row_stride])
+
+    png = b"".join(
+        (
+            b"\x89PNG\r\n\x1a\n",
+            _png_chunk(
+                b"IHDR",
+                struct.pack(">IIBBBBB", int(width), int(height), 8, 6, 0, 0, 0),
+            ),
+            _png_chunk(b"IDAT", zlib.compress(bytes(raw_rows))),
+            _png_chunk(b"IEND", b""),
+        )
+    )
+    path.write_bytes(png)
+
+
 def _create_random_image_texture(
     path: Path,
     *,
@@ -86,25 +132,15 @@ def _create_random_image_texture(
 ) -> bpy.types.Image:
     width, height = [max(1, int(v)) for v in image_size]
     path.parent.mkdir(parents=True, exist_ok=True)
-    image = bpy.data.images.new(
-        name=f"exp1_random_texture_{int(seed)}",
-        width=width,
-        height=height,
-        alpha=True,
-        float_buffer=False,
-    )
-    rng = random.Random(int(seed))
-    pixels = []
-    for _ in range(width * height):
-        pixels.extend((rng.random(), rng.random(), rng.random(), 1.0))
-    image.pixels.foreach_set(pixels)
+    pixels = _random_rgba_bytes(seed=int(seed), width=width, height=height)
+    _write_rgba_png(path, width=width, height=height, pixels=pixels)
+
+    image = bpy.data.images.load(str(path), check_existing=False)
+    image.name = f"exp1_random_texture_{int(seed)}"
     try:
         image.colorspace_settings.name = str(color_space)
     except Exception:
         pass
-    image.filepath_raw = str(path)
-    image.file_format = "PNG"
-    image.save()
     return image
 
 

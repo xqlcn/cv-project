@@ -19,9 +19,29 @@ paths:
   results_dir: ${paths.project_root}/outputs/exp1/results
   figures_dir: ${paths.project_root}/outputs/exp1/figures
   logs_dir: ${paths.project_root}/outputs/exp1/logs
+  hf_cache_root: ${paths.project_root}/data/hf_cache
   shapenet_hf_root: ${paths.project_root}/data/shapenet_hf/ShapeNetCore
   shapenet_hf_extracted_root: ${paths.project_root}/data/shapenet_hf/extracted
   objaverse_root: ${paths.project_root}/data/objaverse
+  objaverse_cache_root: ${paths.project_root}/data/objaverse_cache
+  objaverse_manifest: ${paths.exp1_root}/manifests/objaverse_assets.jsonl
+
+datasets:
+  shapenet:
+    # Keep this bounded by default; set EXP1_SHAPENET_DOWNLOAD=true only after
+    # accepting the dataset license and confirming local storage.
+    download: false
+    categories: ["airplane", "bench", "bottle", "car", "chair", "lamp", "sofa", "table"]
+    max_objects: 500
+  objaverse:
+    categories: ["chair", "table", "car", "airplane", "sofa", "lamp", "bottle", "mug"]
+    max_objects: 250
+    max_download_gb: 20.0
+    cache_dir: ${paths.objaverse_cache_root}
+    manifest_path: ${paths.objaverse_manifest}
+    download_processes: 4
+    batch_size: 8
+    split: train
 
 assets:
   # Experiment 1 defaults to local ShapeNetCore and Objaverse meshes. Keep the
@@ -49,9 +69,9 @@ assets:
       local_dir: ${paths.shapenet_hf_root}
       revision: null
       token: true
-      download: false
-      # Set this before enabling the source to avoid downloading all ShapeNet.
-      categories: []
+      download: ${datasets.shapenet.download}
+      categories: ${datasets.shapenet.categories}
+      max_objects: ${datasets.shapenet.max_objects}
       allow_patterns: null
       ignore_patterns: ["*.md", "*.txt"]
       extract_archives: true
@@ -59,6 +79,13 @@ assets:
       overwrite_extract: false
       source_dataset: shapenet
       enabled: true
+      skip_missing: true
+    - name: objaverse_manifest
+      type: manifest
+      manifest_path: ${paths.objaverse_manifest}
+      source_dataset: objaverse
+      enabled: true
+      skip_missing: true
     - name: objaverse
       type: objaverse
       root: ${paths.objaverse_root}

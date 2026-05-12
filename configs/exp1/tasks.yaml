@@ -22,11 +22,15 @@ models:
       supported_layers: ["final", "layer4", "layer8", "layer12"]
     dinov2_vit_b:
       family: dino
+      backend: transformers
+      model_id: facebook/dinov2-base
       hub_name: dinov2_vitb14
       image_size: 518
       supported_layers: ["final", "layer4", "layer8", "layer12"]
     dinov2_vit_l:
       family: dino
+      backend: transformers
+      model_id: facebook/dinov2-large
       hub_name: dinov2_vitl14
       image_size: 518
       supported_layers: ["final", "layer4", "layer8", "layer12"]

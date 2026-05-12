@@ -31,6 +31,8 @@ OPTIONAL_ASSET_METADATA_KEYS = (
     "hf_revision",
     "shapenet_synset_id",
     "shapenet_model_id",
+    "objaverse_uid",
+    "objaverse_cache_bytes",
 )
 
 

@@ -15,7 +15,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
+from exp1.config import (
+    default_exp1_config_path,
+    ensure_local_hf_home,
+    load_exp1_config,
+    resolve_path,
+)
 from exp1.features.extract import (
     extract_and_save_feature_caches,
     load_render_rows_for_features,
@@ -45,6 +50,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override features.batch_size. Useful for accelerator-specific tuning.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Override features.num_workers for image loading/preprocessing.",
+    )
+    parser.add_argument(
         "--allow-unvalidated",
         action="store_true",
         help="Do not require qc_pass when the manifest has QC columns.",
@@ -63,6 +80,7 @@ def _device(requested: Optional[str]) -> torch.device:
 def main() -> None:
     args = parse_args()
     cfg = load_exp1_config(args.config)
+    ensure_local_hf_home(cfg)
     project_root = Path(str(cfg.paths.project_root)).expanduser().resolve()
     if bool(cfg.features.get("use_random_augmentations", False)):
         raise RuntimeError(
@@ -98,9 +116,15 @@ def main() -> None:
     model_names = args.models or [str(name) for name in cfg.models.enabled]
     layer_names = args.layers or [str(name) for name in cfg.models.layers]
     device = _device(args.device or str(cfg.features.device))
+    batch_size = int(
+        args.batch_size if args.batch_size is not None else cfg.features.batch_size
+    )
+    num_workers = int(
+        args.num_workers if args.num_workers is not None else cfg.features.num_workers
+    )
     print(
         f"Extracting {len(rows)} renders on {device} for models={model_names}, "
-        f"layers={layer_names}"
+        f"layers={layer_names}, batch_size={batch_size}, num_workers={num_workers}"
     )
 
     written = []
@@ -114,11 +138,12 @@ def main() -> None:
             model_cfg=OmegaConf.to_container(model_defs[model_name], resolve=True),
             layer_names=layer_names,
             feature_dir=feature_dir,
-            batch_size=int(cfg.features.batch_size),
+            batch_size=batch_size,
             token=str(cfg.features.token),
             device=device,
             project_root=project_root,
             normalize=bool(cfg.features.normalize),
+            num_workers=num_workers,
         )
         written.extend(paths)
         for path in paths:

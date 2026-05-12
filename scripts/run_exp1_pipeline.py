@@ -16,14 +16,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
+from exp1.config import (
+    default_exp1_config_path,
+    ensure_local_hf_home,
+    load_exp1_config,
+    resolve_path,
+)
 from exp1.features.storage import feature_cache_path
 from exp1.metadata.manifest import load_manifest
 from src.utils.io import read_jsonl, write_jsonl
 
 STAGE_ALIASES = {
     "smoke_prepare": ["setup_synthetic", "render_plan", "render_chunks"],
-    "prepare": ["setup_synthetic", "render_plan", "render_chunks"],
+    "prepare": ["preprocess_assets", "render_plan", "render_chunks"],
     "post_render": [
         "combine_render_status",
         "validate_renders",
@@ -32,7 +37,7 @@ STAGE_ALIASES = {
     ],
     "ml": ["features", "probes", "aggregate", "figures"],
     "all": [
-        "setup_synthetic",
+        "preprocess_assets",
         "render_plan",
         "render_chunks",
         "render",
@@ -48,6 +53,7 @@ STAGE_ALIASES = {
 }
 KNOWN_STAGES = {
     "setup_synthetic",
+    "preprocess_assets",
     "render_plan",
     "render_chunks",
     "render",
@@ -86,6 +92,28 @@ def outputs_satisfied(paths: Iterable[Path]) -> bool:
     """Return true when every output path exists."""
     out = list(paths)
     return bool(out) and all(path.exists() for path in out)
+
+
+def asset_manifest_matches_enabled_sources(path: Path, cfg) -> bool:
+    """Return false for stale asset manifests from disabled sources."""
+    if not path.is_file():
+        return False
+    try:
+        rows = load_manifest(path, validate=False)
+    except Exception:
+        return False
+    if rows.empty or "source_dataset" not in rows.columns:
+        return False
+
+    disabled_datasets = set()
+    for source in cfg.assets.sources:
+        if bool(source.get("enabled", False)):
+            continue
+        dataset = source.get("source_dataset", source.get("name"))
+        if dataset is not None:
+            disabled_datasets.add(str(dataset))
+    manifest_datasets = {str(value) for value in rows["source_dataset"].dropna()}
+    return not bool(manifest_datasets & disabled_datasets)
 
 
 def _run_command(
@@ -204,7 +232,7 @@ def parse_args() -> argparse.Namespace:
         "--stages",
         nargs="+",
         default=["smoke_prepare"],
-        help="Stage names or aliases: smoke_prepare, post_render, ml, all.",
+        help="Stage names or aliases: smoke_prepare, prepare, post_render, ml, all.",
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -212,12 +240,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--synthetic-val", type=int, default=1)
     parser.add_argument("--synthetic-seed", type=int, default=0)
     parser.add_argument("--chunk-size", type=int, default=None)
+    parser.add_argument(
+        "--asset-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Asset manifest for render_plan. Defaults to the synthetic catalog for "
+            "smoke_prepare, otherwise paths.normalized_asset_manifest."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     cfg = load_exp1_config(args.config)
+    ensure_local_hf_home(cfg)
     project_root = Path(str(cfg.paths.project_root)).expanduser().resolve()
     config_path = (
         args.config if args.config.is_absolute() else PROJECT_ROOT / args.config
@@ -225,6 +263,12 @@ def main() -> None:
     stages = expand_stages(args.stages)
 
     synthetic_catalog = project_root / "data" / "synthetic_primitives" / "catalog.json"
+    raw_asset_manifest = _resolve_required(project_root, cfg.paths.asset_manifest)
+    normalized_asset_manifest = _resolve_required(
+        project_root,
+        cfg.paths.normalized_asset_manifest,
+    )
+    split_manifest = _resolve_required(project_root, cfg.paths.split_manifest)
     render_plan = _resolve_required(project_root, cfg.paths.render_plan_jsonl)
     chunks_dir = _resolve_required(project_root, cfg.paths.render_chunks_dir)
     render_script = chunks_dir / "run_blender_chunks.sh"
@@ -261,7 +305,42 @@ def main() -> None:
             dry_run=args.dry_run,
         )
 
+    if "preprocess_assets" in stages:
+        preprocess_outputs = [
+            raw_asset_manifest,
+            normalized_asset_manifest,
+            split_manifest,
+        ]
+        if (
+            outputs_satisfied(preprocess_outputs)
+            and asset_manifest_matches_enabled_sources(normalized_asset_manifest, cfg)
+            and not args.force
+        ):
+            print("[skip] preprocess_assets: outputs already exist")
+        else:
+            _run_command(
+                "preprocess_assets",
+                [
+                    py,
+                    "scripts/preprocess_assets.py",
+                    "--config",
+                    str(config_path),
+                ],
+                force=True,
+                dry_run=args.dry_run,
+            )
+
     if "render_plan" in stages:
+        if args.asset_manifest is not None:
+            render_plan_assets = (
+                args.asset_manifest
+                if args.asset_manifest.is_absolute()
+                else project_root / args.asset_manifest
+            )
+        elif "setup_synthetic" in stages and "preprocess_assets" not in stages:
+            render_plan_assets = synthetic_catalog
+        else:
+            render_plan_assets = normalized_asset_manifest
         _run_command(
             "render_plan",
             [
@@ -270,7 +349,7 @@ def main() -> None:
                 "--config",
                 str(config_path),
                 "--asset-manifest",
-                str(synthetic_catalog),
+                str(render_plan_assets),
                 "--output",
                 str(render_plan),
             ],

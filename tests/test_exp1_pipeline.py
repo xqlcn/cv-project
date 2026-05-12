@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pandas as pd
 
 from exp1.metadata.manifest import save_manifest
+from exp1.config import load_exp1_config
+from scripts.estimate_exp1_run import estimate_exp1_run
 from scripts.run_exp1_pipeline import (
+    asset_manifest_matches_enabled_sources,
     combine_render_status_chunks,
     expand_stages,
     outputs_satisfied,
@@ -20,6 +24,11 @@ def test_expand_stages_expands_aliases_once() -> None:
         "render_plan",
         "render_chunks",
     ]
+    assert expand_stages(["prepare"]) == [
+        "preprocess_assets",
+        "render_plan",
+        "render_chunks",
+    ]
 
 
 def test_outputs_satisfied_requires_all_paths(tmp_path) -> None:
@@ -29,6 +38,36 @@ def test_outputs_satisfied_requires_all_paths(tmp_path) -> None:
 
     assert outputs_satisfied([first])
     assert not outputs_satisfied([first, second])
+
+
+def test_asset_manifest_rejects_disabled_source(tmp_path) -> None:
+    from omegaconf import OmegaConf
+
+    manifest = tmp_path / "assets.jsonl"
+    write_jsonl(
+        manifest,
+        [{"object_id": "m1", "source_dataset": "modelnet40"}],
+    )
+    cfg = OmegaConf.create(
+        {
+            "assets": {
+                "sources": [
+                    {
+                        "name": "modelnet40",
+                        "source_dataset": "modelnet40",
+                        "enabled": False,
+                    },
+                    {
+                        "name": "shapenet_hf",
+                        "source_dataset": "shapenet",
+                        "enabled": True,
+                    },
+                ]
+            }
+        }
+    )
+
+    assert not asset_manifest_matches_enabled_sources(manifest, cfg)
 
 
 def test_write_render_chunks_and_shell_script(tmp_path) -> None:
@@ -75,3 +114,17 @@ def test_combine_render_status_chunks(tmp_path) -> None:
     output = combine_render_status_chunks(chunks_dir, tmp_path / "status.jsonl")
 
     assert output.read_text(encoding="utf-8").count("\n") == 2
+
+
+def test_estimate_exp1_run_counts_bounded_config() -> None:
+    cfg = load_exp1_config(Path("configs/exp1_bounded.yaml"))
+
+    estimate = estimate_exp1_run(cfg)
+
+    assert estimate["object_count"] == 50
+    assert estimate["settings_per_object"] == 384
+    assert estimate["render_count"] == 19200
+    assert estimate["enabled_tasks"] == [
+        "surface_normal_aggregate",
+        "relative_depth_regions",
+    ]

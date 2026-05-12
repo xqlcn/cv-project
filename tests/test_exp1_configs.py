@@ -5,7 +5,7 @@ from omegaconf import OmegaConf
 
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
-CONFIG_NAMES = ["exp1_smoke", "exp1_mvp", "exp1_full"]
+CONFIG_NAMES = ["exp1_smoke", "exp1_mvp", "exp1_bounded", "exp1_full"]
 TEXTURE_CONDITIONS = ["photorealistic", "flat", "random_noise"]
 REQUIRED_TOP_LEVEL_KEYS = (
     "paths",
@@ -84,6 +84,18 @@ def test_exp1_smoke_config_stays_tiny() -> None:
     assert max(int(x) for x in cfg.render.resolution) <= 128
 
 
+def test_exp1_bounded_config_focuses_depth_and_normals() -> None:
+    cfg = _compose_with_omegaconf("exp1_bounded")
+
+    assert list(cfg.tasks.enabled) == [
+        "surface_normal_aggregate",
+        "relative_depth_regions",
+    ]
+    assert cfg.assets.max_objects == 50
+    assert cfg.datasets.objaverse.max_download_gb <= 10.0
+    assert str(cfg.paths.hf_cache_root).endswith("data/hf_cache")
+
+
 def test_exp1_shapenet_source_defaults_to_accessible_core_zip_repo() -> None:
     cfg = _compose_with_omegaconf("exp1_smoke")
     sources = {str(source.name): source for source in cfg.assets.sources}
@@ -92,6 +104,8 @@ def test_exp1_shapenet_source_defaults_to_accessible_core_zip_repo() -> None:
     assert str(cfg.paths.shapenet_hf_root).endswith("data/shapenet_hf/ShapeNetCore")
     assert sources["shapenet_hf"].download is False
     assert sources["shapenet_hf"].enabled is True
+    assert list(sources["shapenet_hf"].categories)
+    assert sources["shapenet_hf"].max_objects > 0
 
 
 def test_exp1_default_sources_are_shapenetcore_and_objaverse() -> None:
@@ -100,8 +114,12 @@ def test_exp1_default_sources_are_shapenetcore_and_objaverse() -> None:
 
     assert sources["modelnet40"].enabled is False
     assert sources["synthetic_primitives"].enabled is False
+    assert sources["objaverse_manifest"].enabled is True
     assert sources["objaverse"].enabled is True
     assert str(cfg.paths.objaverse_root).endswith("data/objaverse")
+    assert str(cfg.paths.objaverse_manifest).endswith("manifests/objaverse_assets.jsonl")
+    assert cfg.datasets.objaverse.max_objects > 0
+    assert cfg.datasets.objaverse.max_download_gb > 0
 
 
 def test_exp1_full_probe_tasks_have_label_paths() -> None:

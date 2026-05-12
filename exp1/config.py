@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, List, Optional, cast
 
@@ -59,3 +60,18 @@ def resolve_path(base: Path, path: Optional[str]) -> Optional[Path]:
         return None
     out = Path(path)
     return out if out.is_absolute() else base / out
+
+
+def ensure_local_hf_home(cfg: DictConfig) -> Path:
+    """Default Hugging Face caches to the project data directory.
+
+    This keeps CLIP/DINOv2/ShapeNet downloads out of user-level cache paths that
+    may be unavailable inside sandboxed runs, while preserving an explicit
+    caller-provided ``HF_HOME``.
+    """
+    root = Path(str(cfg.paths.project_root)).expanduser().resolve()
+    configured = OmegaConf.select(cfg, "paths.hf_cache_root", default="data/hf_cache")
+    path = resolve_path(root, str(configured))
+    assert path is not None
+    os.environ.setdefault("HF_HOME", str(path))
+    return path

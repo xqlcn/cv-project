@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from exp1.analysis.plots import plot_layerwise_metrics, plot_texture_drops
+from exp1.analysis.qualitative import make_qualitative_probe_tables
 from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
 from exp1.evaluation.comparisons import compute_texture_dependence_drops
 from exp1.evaluation.metrics import load_results_table
@@ -40,6 +41,8 @@ def main() -> None:
     cfg = load_exp1_config(args.config)
     project_root = Path(str(cfg.paths.project_root)).expanduser().resolve()
     results_dir = _resolve_required(project_root, str(cfg.paths.results_dir))
+    probe_root = _resolve_required(project_root, str(cfg.paths.probe_output_dir))
+    manifest_path = _resolve_required(project_root, str(cfg.paths.valid_render_manifest))
     figures_dir = (
         args.output_dir
         if args.output_dir is not None
@@ -73,6 +76,26 @@ def main() -> None:
         )
     )
     paths.extend(plot_texture_drops(drops, figures_dir, splits=args.split))
+    task_label_paths = {}
+    for task in cfg.tasks.enabled:
+        task_name = str(task)
+        label_path = cfg.tasks.definitions[task_name].get("label_path")
+        if label_path is None:
+            continue
+        task_label_paths[task_name] = _resolve_required(project_root, str(label_path))
+    paths.extend(
+        make_qualitative_probe_tables(
+            tasks=[str(task) for task in cfg.tasks.enabled],
+            task_label_paths=task_label_paths,
+            manifest_path=manifest_path,
+            probe_root=probe_root,
+            output_dir=figures_dir,
+            project_root=project_root,
+            layer_name="final",
+            textures=[str(texture) for texture in cfg.textures.conditions],
+            preferred_split="test",
+        )
+    )
     print(f"Wrote {len(paths)} figure(s) to {figures_dir}")
     for path in paths:
         print(f"Wrote figure: {path}")

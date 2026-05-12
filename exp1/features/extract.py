@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 
@@ -124,6 +125,7 @@ def extract_feature_arrays(
     normalize: bool = True,
     image_column: str = "rgb_path",
     show_progress: bool = True,
+    num_workers: int = 0,
 ) -> dict[str, np.ndarray]:
     """Extract feature arrays for requested layers using a batch callback."""
     rows_list = [dict(row) for row in rows]
@@ -135,12 +137,18 @@ def extract_feature_arrays(
     if show_progress:
         iterator = tqdm(iterator, desc="extract exp1 features")
 
+    def _load_image(row: Mapping[str, Any]) -> Image.Image:
+        with Image.open(_resolve_path(project_root, row[image_column])) as image:
+            return image.convert("RGB")
+
+    worker_count = max(0, int(num_workers))
     for start in iterator:
         batch_rows = rows_list[start : start + int(batch_size)]
-        images = []
-        for row in batch_rows:
-            with Image.open(_resolve_path(project_root, row[image_column])) as image:
-                images.append(image.convert("RGB"))
+        if worker_count > 1 and len(batch_rows) > 1:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                images = list(executor.map(_load_image, batch_rows))
+        else:
+            images = [_load_image(row) for row in batch_rows]
         batch_features = batch_extract_fn(images)
         for layer_name in layer_names:
             layer_features = _batch_layer_features(
@@ -194,6 +202,9 @@ def build_backbone_extractor(
         return FrozenDINOv2Extractor(
             DINOExtractorConfig(
                 hub_name=str(model_cfg.get("hub_name", "dinov2_vitb14")),
+                model_id=model_cfg.get("model_id"),
+                backend=str(model_cfg.get("backend", "transformers")),
+                revision=model_cfg.get("revision"),
                 image_size=int(model_cfg.get("image_size", 518)),
                 layers=layers or None,
             ),
@@ -202,7 +213,7 @@ def build_backbone_extractor(
     raise ValueError(f"Unknown model family for {model_name}: {family}")
 
 
-def batch_extract_fn_for_extractor(extractor: Any) -> BatchFn:
+def batch_extract_fn_for_extractor(extractor: Any, *, num_workers: int = 0) -> BatchFn:
     """Return a deterministic PIL batch callback for an existing extractor."""
 
     def _extract(images: list[Image.Image]) -> Mapping[str, Any]:
@@ -210,6 +221,16 @@ def batch_extract_fn_for_extractor(extractor: Any) -> BatchFn:
             pixel_values = extractor._pixel_values_from_pil(images)
             return extractor.forward_image_tensor(pixel_values)
         if hasattr(extractor, "_prepare_batch"):
+            if int(num_workers) > 1 and hasattr(extractor, "transform"):
+                with ThreadPoolExecutor(max_workers=int(num_workers)) as executor:
+                    tensors = list(
+                        executor.map(
+                            lambda image: extractor.transform(image.convert("RGB")),
+                            images,
+                        )
+                    )
+                batch = torch.stack(tensors).to(extractor.device, non_blocking=True)
+                return extractor.forward_tensor(batch)
             batch = extractor._prepare_batch(images)
             return extractor.forward_tensor(batch)
         raise TypeError(f"Unsupported extractor type: {type(extractor).__name__}")
@@ -235,6 +256,7 @@ def extract_and_save_feature_caches(
     device: torch.device,
     project_root: Optional[Union[str, Path]] = None,
     normalize: bool = True,
+    num_workers: int = 0,
 ) -> list[Path]:
     """Extract one model's requested layers and save canonical NPZ caches."""
     rows_list = [dict(row) for row in rows]
@@ -246,12 +268,16 @@ def extract_and_save_feature_caches(
     )
     arrays = extract_feature_arrays(
         rows_list,
-        batch_extract_fn=batch_extract_fn_for_extractor(extractor),
+        batch_extract_fn=batch_extract_fn_for_extractor(
+            extractor,
+            num_workers=num_workers,
+        ),
         layer_names=layer_names,
         batch_size=batch_size,
         token=token,
         project_root=project_root,
         normalize=normalize,
+        num_workers=num_workers,
     )
     render_ids = [str(row["render_id"]) for row in rows_list]
     paths: list[Path] = []

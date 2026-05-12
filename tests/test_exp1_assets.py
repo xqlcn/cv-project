@@ -14,6 +14,7 @@ from exp1.assets.discover import (
     discover_modelnet40_assets,
 )
 from exp1.assets.normalize import normalize_asset_manifest
+from exp1.assets.objaverse import bytes_from_gb, select_objaverse_lvis_uids
 from exp1.assets.shapenet import (
     DEFAULT_SHAPENET_HF_REPO_ID,
     SHAPENETCORE_GLB_HF_REPO_ID,
@@ -422,6 +423,36 @@ def test_config_source_interleaving_does_not_starve_objaverse() -> None:
     )
 
     assert [row["source_dataset"] for row in rows] == ["shapenet", "objaverse"]
+
+
+def test_objaverse_lvis_selection_is_deterministic_and_bounded() -> None:
+    annotations = {
+        "chair": ["uid3", "uid1"],
+        "table": ["uid2", "uid1"],
+    }
+
+    rows = select_objaverse_lvis_uids(
+        annotations,
+        categories=["chair", "table"],
+        max_objects=3,
+    )
+
+    assert rows == ["uid3", "uid1", "uid2"]
+    assert bytes_from_gb(0.5) == 536870912
+
+
+def test_objaverse_lvis_selection_accepts_common_category_aliases() -> None:
+    annotations = {
+        "car_(automobile)": ["uid1"],
+        "chair": ["uid2"],
+    }
+
+    rows = select_objaverse_lvis_uids(
+        annotations,
+        categories=["car", "chair"],
+    )
+
+    assert rows == ["uid1", "uid2"]
 
 
 def test_preprocess_assets_script_combines_shapenet_and_objaverse_cli(

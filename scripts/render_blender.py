@@ -355,13 +355,63 @@ def configure_render(cfg: Mapping[str, Any]) -> None:
         scene.cycles.samples = int(render_cfg.get("samples", 64))
         scene.cycles.use_adaptive_sampling = True
         if bool(render_cfg.get("use_gpu", True)):
-            try:
-                prefs = bpy.context.preferences.addons["cycles"].preferences
-                prefs.get_devices()
-                for dev in prefs.devices:
-                    dev.use = dev.type != "CPU"
-            except Exception:
-                pass
+            _configure_cycles_gpu(render_cfg)
+
+
+def _configure_cycles_gpu(render_cfg: Mapping[str, Any]) -> None:
+    """Best-effort GPU setup for headless Cycles renders."""
+    scene = bpy.context.scene
+    try:
+        prefs = bpy.context.preferences.addons["cycles"].preferences
+    except Exception as exc:
+        print(f"Cycles GPU setup skipped: {type(exc).__name__}: {exc}", flush=True)
+        return
+
+    requested_backend = str(render_cfg.get("gpu_backend", "auto")).upper()
+    backend_candidates = (
+        [requested_backend]
+        if requested_backend and requested_backend != "AUTO"
+        else ["METAL", "OPTIX", "CUDA", "HIP", "ONEAPI"]
+    )
+    selected_backend = ""
+    for backend in backend_candidates:
+        try:
+            prefs.compute_device_type = backend
+            selected_backend = backend
+            break
+        except Exception:
+            continue
+
+    try:
+        prefs.get_devices()
+    except Exception as exc:
+        print(
+            f"Cycles GPU device query failed: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+    enabled_devices = []
+    for dev in getattr(prefs, "devices", []):
+        try:
+            dev.use = dev.type != "CPU"
+            if dev.use:
+                enabled_devices.append(f"{dev.name}:{dev.type}")
+        except Exception:
+            continue
+
+    if enabled_devices:
+        scene.cycles.device = "GPU"
+        print(
+            "Cycles GPU enabled"
+            f" backend={selected_backend or 'default'} devices={enabled_devices}",
+            flush=True,
+        )
+    else:
+        scene.cycles.device = "CPU"
+        print(
+            "Cycles GPU requested but no non-CPU devices were enabled; using CPU",
+            flush=True,
+        )
 
 
 def set_world_color(cfg: Mapping[str, Any]) -> None:
@@ -415,6 +465,33 @@ def _record_output_paths(
 BLENDER_IMPORTABLE_TEXTURE_EXTENSIONS = {".obj", ".glb", ".gltf", ".fbx", ".ply"}
 
 
+def _truthy(value: Any) -> Optional[bool]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+def _record_has_photorealistic_material(record: Mapping[str, Any]) -> bool:
+    for key in (
+        "has_photorealistic_material",
+        "photorealistic_material_available",
+        "has_imported_material",
+    ):
+        if key not in record:
+            continue
+        value = _truthy(record.get(key))
+        if value is not None:
+            return bool(value)
+    return True
+
+
 def _mesh_path(record: Mapping[str, Any], project_root: Path) -> tuple[Path, str]:
     raw = _resolve(
         project_root,
@@ -422,7 +499,7 @@ def _mesh_path(record: Mapping[str, Any], project_root: Path) -> tuple[Path, str
     )
     normalized = _resolve(project_root, record.get("normalized_mesh_path"))
     if (
-        str(record.get("texture_condition", "")).lower() == "photorealistic"
+        _record_has_photorealistic_material(record)
         and raw is not None
         and raw.suffix.lower() in BLENDER_IMPORTABLE_TEXTURE_EXTENSIONS
         and raw.is_file()

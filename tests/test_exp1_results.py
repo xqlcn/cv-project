@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 from exp1.analysis.plots import plot_layerwise_metrics
+from exp1.analysis.qualitative import make_qualitative_probe_table
 from exp1.evaluation.comparisons import compute_texture_dependence_drops
 from exp1.evaluation.metrics import (
     aggregate_prediction_bootstrap_cis,
@@ -156,6 +159,144 @@ def test_layerwise_plot_is_generated(tmp_path) -> None:
 
     assert len(paths) == 1
     assert paths[0].is_file()
+
+
+def test_qualitative_probe_table_is_generated_for_surface_normals(tmp_path) -> None:
+    textures = ["photorealistic", "flat", "random_noise"]
+    rows = []
+    label_rows = []
+    probe_root = tmp_path / "probes"
+    for idx, texture in enumerate(textures):
+        render_id = f"render_{idx}"
+        rgb_path = tmp_path / f"{texture}.png"
+        mask_path = tmp_path / f"{texture}_mask.npy"
+        image = Image.new("RGB", (16, 16), (40 + idx * 40, 80, 120))
+        image.save(rgb_path)
+        np.save(mask_path, np.ones((16, 16), dtype=bool))
+        rows.append(
+            {
+                "render_id": render_id,
+                "split": "test",
+                "texture_condition": texture,
+                "texture_control_group_id": "group_0",
+                "rgb_path": str(rgb_path),
+                "mask_path": str(mask_path),
+            }
+        )
+        label_rows.append(
+            {
+                "render_id": render_id,
+                "mean_normal_x": 0.0,
+                "mean_normal_y": 0.0,
+                "mean_normal_z": 1.0,
+                "label_valid": True,
+            }
+        )
+        pred_dir = (
+            probe_root
+            / "clip_vit_b16"
+            / "final"
+            / "surface_normal_aggregate"
+            / f"texture_{texture}"
+        )
+        pred_dir.mkdir(parents=True)
+        pd.DataFrame(
+            [
+                {
+                    "render_id": render_id,
+                    "split": "test",
+                    "pred_mean_normal_x": 0.0,
+                    "pred_mean_normal_y": 0.0,
+                    "pred_mean_normal_z": 1.0,
+                }
+            ]
+        ).to_csv(pred_dir / "predictions.csv", index=False)
+
+    manifest_path = tmp_path / "manifest.csv"
+    label_path = tmp_path / "labels.csv"
+    pd.DataFrame(rows).to_csv(manifest_path, index=False)
+    pd.DataFrame(label_rows).to_csv(label_path, index=False)
+
+    output = make_qualitative_probe_table(
+        task="surface_normal_aggregate",
+        manifest_path=manifest_path,
+        label_path=label_path,
+        probe_root=probe_root,
+        output_path=tmp_path / "qualitative.png",
+        project_root=tmp_path,
+        model_display_order={"clip_vit_b16": "CLIP B/16"},
+        textures=textures,
+    )
+
+    assert output.is_file()
+
+
+def test_qualitative_probe_table_is_generated_for_relative_depth(tmp_path) -> None:
+    textures = ["photorealistic", "flat", "random_noise"]
+    rows = []
+    label_rows = []
+    probe_root = tmp_path / "probes"
+    for idx, texture in enumerate(textures):
+        render_id = f"render_{idx}"
+        rgb_path = tmp_path / f"{texture}.png"
+        Image.new("RGB", (16, 16), (40, 80 + idx * 40, 120)).save(rgb_path)
+        rows.append(
+            {
+                "render_id": render_id,
+                "split": "test",
+                "texture_condition": texture,
+                "texture_control_group_id": "group_0",
+                "rgb_path": str(rgb_path),
+            }
+        )
+        label_rows.append(
+            {
+                "render_id": render_id,
+                "relative_depth_grid_rows": 3,
+                "relative_depth_grid_cols": 3,
+                "relative_depth_pair_count": 1,
+                "pair_0_region_a": 0,
+                "pair_0_region_b": 1,
+                "pair_0_label": 1,
+                "pair_0_valid": True,
+                "label_valid": True,
+            }
+        )
+        pred_dir = (
+            probe_root
+            / "clip_vit_b16"
+            / "final"
+            / "relative_depth_regions"
+            / f"texture_{texture}"
+        )
+        pred_dir.mkdir(parents=True)
+        pd.DataFrame(
+            [
+                {
+                    "render_id": render_id,
+                    "split": "test",
+                    "pair_0_prob": 0.75,
+                }
+            ]
+        ).to_csv(pred_dir / "predictions.csv", index=False)
+
+    manifest_path = tmp_path / "manifest.csv"
+    label_path = tmp_path / "labels.csv"
+    pd.DataFrame(rows).to_csv(manifest_path, index=False)
+    pd.DataFrame(label_rows).to_csv(label_path, index=False)
+
+    output = make_qualitative_probe_table(
+        task="relative_depth_regions",
+        manifest_path=manifest_path,
+        label_path=label_path,
+        probe_root=probe_root,
+        output_path=tmp_path / "qualitative_depth.png",
+        project_root=tmp_path,
+        model_display_order={"clip_vit_b16": "CLIP B/16"},
+        textures=textures,
+    )
+
+    assert output.is_file()
 
 
 def test_bootstrap_mean_ci_can_resample_by_object() -> None:
