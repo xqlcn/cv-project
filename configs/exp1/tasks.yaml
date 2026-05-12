@@ -74,26 +74,31 @@ tasks:
     camera_distance:
       type: regression
       target: log_camera_distance
+      label_path: ${paths.labels_dir}/labels_camera.parquet
       metric: mae
       enabled_in_full: true
     viewpoint:
       type: regression
       targets: ["azimuth_sin", "azimuth_cos", "elevation_sin", "elevation_cos"]
+      label_path: ${paths.labels_dir}/labels_camera.parquet
       metric: angular_error_deg
       enabled_in_full: true
     lighting_direction:
       type: regression
       targets: ["light_dir_x", "light_dir_y", "light_dir_z"]
+      label_path: ${paths.labels_dir}/labels_lighting.parquet
       metric: angular_error_deg
       enabled_in_full: true
     lighting_intensity:
       type: regression
       target: log_light_intensity
+      label_path: ${paths.labels_dir}/labels_lighting.parquet
       metric: mae
       enabled_in_full: true
     apparent_scale:
       type: regression
       targets: ["object_scale", "foreground_area_fraction"]
+      label_path: ${paths.labels_dir}/labels_scale.parquet
       metric: mae
       enabled_in_full: true
 

@@ -35,7 +35,7 @@ scale_grid:
   values: [0.9, 1.0, 1.1]
 
 models:
-  enabled: ["clip_vit_b16", "dinov2_vit_b"]
+  enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
   layers: ["final", "layer4", "layer8", "layer12"]
 
 tasks:

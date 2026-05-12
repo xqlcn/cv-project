@@ -13,6 +13,15 @@ from src.datasets.modelnet40_index import discover_modelnet40_records
 ALLOWED_MESH_EXTENSIONS = (".obj", ".glb", ".gltf", ".fbx", ".ply", ".off")
 SPLIT_ALIASES = {"valid": "val", "validation": "val"}
 KNOWN_SPLITS = {"train", "val", "test", "valid", "validation"}
+OPTIONAL_ASSET_METADATA_KEYS = (
+    "has_photorealistic_material",
+    "photorealistic_material_available",
+    "has_imported_material",
+    "hf_repo_id",
+    "hf_revision",
+    "shapenet_synset_id",
+    "shapenet_model_id",
+)
 
 
 def _clean_split(split: Optional[Any], *, default_split: str = "train") -> str:
@@ -70,7 +79,7 @@ def standardize_asset_record(
     source_dataset: Optional[str] = None,
     default_split: str = "train",
 ) -> Dict[str, Any]:
-    """Convert existing synthetic/ModelNet rows into Experiment 1 asset rows."""
+    """Convert existing mesh manifest rows into Experiment 1 asset rows."""
     object_id = row.get("object_id") or row.get("id") or row.get("uid")
     mesh_path = row.get("raw_mesh_path") or row.get("mesh_path") or row.get("path")
     if object_id is None:
@@ -81,7 +90,7 @@ def standardize_asset_record(
     dataset = row.get("source_dataset") or row.get("dataset") or source_dataset
     normalized_path = row.get("normalized_mesh_path") or row.get("normalized_mesh")
 
-    return {
+    out: Dict[str, Any] = {
         "object_id": str(object_id),
         "source_dataset": str(dataset or "unknown"),
         "category": str(row.get("category", "unknown")),
@@ -91,6 +100,10 @@ def standardize_asset_record(
         "asset_status": str(row.get("asset_status", "discovered")),
         "asset_error_message": str(row.get("asset_error_message", "")),
     }
+    for key in OPTIONAL_ASSET_METADATA_KEYS:
+        if key in row:
+            out[key] = row[key]
+    return out
 
 
 def discover_assets_from_directory(
@@ -165,7 +178,7 @@ def load_assets_from_manifest(
     default_split: str = "train",
     max_objects: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Load a synthetic/ModelNet-style JSON/JSONL/CSV manifest."""
+    """Load a synthetic/ShapeNetCore/Objaverse-style JSON/JSONL/CSV manifest."""
     rows = load_manifest(path, validate=False).to_dict(orient="records")
     if max_objects is not None:
         rows = rows[: int(max_objects)]

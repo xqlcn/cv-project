@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import bpy
@@ -42,15 +43,9 @@ def has_preservable_material(obj: bpy.types.Object) -> bool:
             continue
         if _has_image_texture(mat):
             return True
-        if (
-            mat.use_nodes
-            and mat.node_tree is not None
-            and len(mat.node_tree.nodes) > 0
-        ):
+        if mat.use_nodes and mat.node_tree is not None and len(mat.node_tree.nodes) > 0:
             return True
-        diffuse = tuple(
-            float(v) for v in getattr(mat, "diffuse_color", (1, 1, 1, 1))
-        )
+        diffuse = tuple(float(v) for v in getattr(mat, "diffuse_color", (1, 1, 1, 1)))
         if diffuse[:3] != (1.0, 1.0, 1.0):
             return True
     return False
@@ -82,6 +77,37 @@ def _new_principled_material(
     return mat, principled, nodes, links
 
 
+def _create_random_image_texture(
+    path: Path,
+    *,
+    seed: int,
+    image_size: tuple = (256, 256),
+    color_space: str = "sRGB",
+) -> bpy.types.Image:
+    width, height = [max(1, int(v)) for v in image_size]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = bpy.data.images.new(
+        name=f"exp1_random_texture_{int(seed)}",
+        width=width,
+        height=height,
+        alpha=True,
+        float_buffer=False,
+    )
+    rng = random.Random(int(seed))
+    pixels = []
+    for _ in range(width * height):
+        pixels.extend((rng.random(), rng.random(), rng.random(), 1.0))
+    image.pixels.foreach_set(pixels)
+    try:
+        image.colorspace_settings.name = str(color_space)
+    except Exception:
+        pass
+    image.filepath_raw = str(path)
+    image.file_format = "PNG"
+    image.save()
+    return image
+
+
 def _set_input(node: bpy.types.Node, name: str, value) -> None:
     if name in node.inputs:
         node.inputs[name].default_value = value
@@ -96,6 +122,9 @@ def assign_principled_material(
     roughness: float = 0.55,
     noise_scale_range: tuple = (8.0, 20.0),
     noise_detail: float = 6.0,
+    image_texture_path: Optional[str] = None,
+    image_size: tuple = (256, 256),
+    image_color_space: str = "sRGB",
     preserve_existing: bool = True,
 ) -> bpy.types.Material:
     """
@@ -105,6 +134,8 @@ def assign_principled_material(
     """
     texture_type = texture_type.lower()
     if texture_type == "random_noise":
+        texture_type = "noise"
+    if texture_type == "image_noise":
         texture_type = "noise"
 
     existing_material = next((mat for mat in _material_slots(obj) if mat), None)
@@ -116,9 +147,7 @@ def assign_principled_material(
         return existing_material
 
     suffix = (
-        "photorealistic_fallback"
-        if texture_type == "photorealistic"
-        else texture_type
+        "photorealistic_fallback" if texture_type == "photorealistic" else texture_type
     )
     mat_name = f"{obj.name}_{suffix}_mat"
     mat, principled, nodes, links = _new_principled_material(mat_name)
@@ -127,37 +156,54 @@ def assign_principled_material(
         _set_input(principled, "Base Color", base_color)
         _set_input(principled, "Roughness", float(roughness))
     elif texture_type == "noise":
-        rng = random.Random(seed)
-        tex = nodes.new(type="ShaderNodeTexNoise")
-        low, high = [float(v) for v in noise_scale_range]
-        tex.inputs["Scale"].default_value = low + rng.random() * (high - low)
-        tex.inputs["Detail"].default_value = float(noise_detail)
-        if "Roughness" in tex.inputs:
-            tex.inputs["Roughness"].default_value = 0.5 + rng.random() * 0.35
-        if "Distortion" in tex.inputs:
-            tex.inputs["Distortion"].default_value = rng.random() * 2.0
-        mapping = nodes.new(type="ShaderNodeMapping")
-        coord = nodes.new(type="ShaderNodeTexCoord")
-        links.new(coord.outputs["Object"], mapping.inputs["Vector"])
-        links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+        if image_texture_path:
+            image = _create_random_image_texture(
+                Path(image_texture_path),
+                seed=seed,
+                image_size=image_size,
+                color_space=image_color_space,
+            )
+            tex = nodes.new(type="ShaderNodeTexImage")
+            tex.image = image
+            tex.extension = "REPEAT"
+            coord = nodes.new(type="ShaderNodeTexCoord")
+            vector_output = (
+                "UV" if getattr(obj.data, "uv_layers", None) else "Generated"
+            )
+            links.new(coord.outputs[vector_output], tex.inputs["Vector"])
+            links.new(tex.outputs["Color"], principled.inputs["Base Color"])
+        else:
+            rng = random.Random(seed)
+            tex = nodes.new(type="ShaderNodeTexNoise")
+            low, high = [float(v) for v in noise_scale_range]
+            tex.inputs["Scale"].default_value = low + rng.random() * (high - low)
+            tex.inputs["Detail"].default_value = float(noise_detail)
+            if "Roughness" in tex.inputs:
+                tex.inputs["Roughness"].default_value = 0.5 + rng.random() * 0.35
+            if "Distortion" in tex.inputs:
+                tex.inputs["Distortion"].default_value = rng.random() * 2.0
+            mapping = nodes.new(type="ShaderNodeMapping")
+            coord = nodes.new(type="ShaderNodeTexCoord")
+            links.new(coord.outputs["Object"], mapping.inputs["Vector"])
+            links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
 
-        ramp = nodes.new(type="ShaderNodeValToRGB")
-        ramp.color_ramp.elements[0].position = 0.15 + rng.random() * 0.25
-        ramp.color_ramp.elements[0].color = (
-            rng.random(),
-            rng.random(),
-            rng.random(),
-            1.0,
-        )
-        ramp.color_ramp.elements[1].position = 0.65 + rng.random() * 0.25
-        ramp.color_ramp.elements[1].color = (
-            rng.random(),
-            rng.random(),
-            rng.random(),
-            1.0,
-        )
-        links.new(tex.outputs["Fac"], ramp.inputs["Fac"])
-        links.new(ramp.outputs["Color"], principled.inputs["Base Color"])
+            ramp = nodes.new(type="ShaderNodeValToRGB")
+            ramp.color_ramp.elements[0].position = 0.15 + rng.random() * 0.25
+            ramp.color_ramp.elements[0].color = (
+                rng.random(),
+                rng.random(),
+                rng.random(),
+                1.0,
+            )
+            ramp.color_ramp.elements[1].position = 0.65 + rng.random() * 0.25
+            ramp.color_ramp.elements[1].color = (
+                rng.random(),
+                rng.random(),
+                rng.random(),
+                1.0,
+            )
+            links.new(tex.outputs["Fac"], ramp.inputs["Fac"])
+            links.new(ramp.outputs["Color"], principled.inputs["Base Color"])
         _set_input(principled, "Roughness", float(roughness))
     else:
         raise ValueError(f"Unknown texture_type: {texture_type}")

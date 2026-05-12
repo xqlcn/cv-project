@@ -32,7 +32,10 @@ def parse_args() -> argparse.Namespace:
         "--asset-manifest",
         type=Path,
         default=None,
-        help="Optional synthetic/ModelNet asset manifest. Defaults to config source.",
+        help=(
+            "Optional synthetic/ShapeNetCore/Objaverse asset manifest. "
+            "Defaults to config source."
+        ),
     )
     parser.add_argument(
         "--output",

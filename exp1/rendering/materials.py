@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from exp1.metadata.schema import VALID_TEXTURE_CONDITIONS
 
 
-TEXTURELESS_SOURCE_DATASETS = ("modelnet40", "synthetic_primitives")
+TEXTURELESS_SOURCE_DATASETS = ("synthetic_primitives",)
 TEXTURELESS_RAW_EXTENSIONS = (".off",)
 
 
@@ -99,8 +99,24 @@ def material_mode(texture_condition: str) -> str:
     """Map Experiment 1 texture conditions to existing Blender helper modes."""
     condition = texture_condition.lower()
     if condition == "random_noise":
-        return "noise"
+        return "image_noise"
     return condition
+
+
+def _random_texture_path(record: Mapping[str, Any]) -> str:
+    explicit = record.get("random_texture_path")
+    if explicit is not None and str(explicit).strip():
+        return str(explicit)
+    rgb_path = record.get("rgb_path")
+    if rgb_path is not None and str(rgb_path).strip():
+        return str(Path(str(rgb_path)).with_name("random_texture.png"))
+    return ""
+
+
+def _has_uv_layers(obj: Any) -> bool:
+    data = getattr(obj, "data", None)
+    uv_layers = getattr(data, "uv_layers", None)
+    return bool(uv_layers)
 
 
 def apply_materials(
@@ -125,9 +141,7 @@ def apply_materials(
     noise_cfg = textures_cfg.get("random_noise", {})
 
     flat_color = _rgba(flat_cfg.get("color_rgb", (0.62, 0.62, 0.62)))
-    fallback_color = _rgba(
-        photo_cfg.get("fallback_color_rgb", (0.68, 0.68, 0.68))
-    )
+    fallback_color = _rgba(photo_cfg.get("fallback_color_rgb", (0.68, 0.68, 0.68)))
     flat_roughness = float(flat_cfg.get("roughness", 0.55))
     noise_roughness = float(noise_cfg.get("roughness", 0.55))
     preserve_imported = bool(photo_cfg.get("preserve_imported_materials", True))
@@ -143,9 +157,7 @@ def apply_materials(
         for obj in mesh_objects:
             has_material = bool(has_preservable_material(obj))
             should_preserve = (
-                preserve_imported
-                and configured_reason is None
-                and has_material
+                preserve_imported and configured_reason is None and has_material
             )
             if should_preserve:
                 preserved += 1
@@ -219,6 +231,15 @@ def apply_materials(
     noise_scale = noise_cfg.get("scale_range", (8.0, 20.0))
     if not isinstance(noise_scale, (list, tuple)) or len(noise_scale) != 2:
         noise_scale = (8.0, 20.0)
+    texture_size = noise_cfg.get("texture_size", (256, 256))
+    if not isinstance(texture_size, (list, tuple)) or len(texture_size) != 2:
+        texture_size = (256, 256)
+    random_texture_path = _random_texture_path(record)
+    random_texture_mapping = (
+        "uv"
+        if mesh_objects and all(_has_uv_layers(obj) for obj in mesh_objects)
+        else "generated_fallback"
+    )
     for obj in mesh_objects:
         assign_principled_material(
             obj,
@@ -228,6 +249,9 @@ def apply_materials(
             roughness=noise_roughness,
             noise_scale_range=tuple(float(v) for v in noise_scale),
             noise_detail=float(noise_cfg.get("detail", 6.0)),
+            image_texture_path=random_texture_path,
+            image_size=tuple(int(v) for v in texture_size),
+            image_color_space=str(noise_cfg.get("color_space", "sRGB")),
             preserve_existing=False,
         )
         overridden += 1
@@ -242,7 +266,9 @@ def apply_materials(
         "photorealistic_material_status": "not_applicable",
         "photorealistic_fallback_reason": "",
         "random_noise_seed": seed,
-        "random_noise_texture_type": "procedural_noise",
-        "random_texture_path": "",
+        "random_noise_texture_type": "image_texture",
+        "random_texture_path": random_texture_path,
+        "random_texture_size": [int(v) for v in texture_size],
+        "random_texture_mapping": random_texture_mapping,
         "texture_seed_used": seed,
     }

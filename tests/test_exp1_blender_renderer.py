@@ -42,6 +42,26 @@ def test_render_blender_help_works_without_blender() -> None:
     assert "--chunk" in result.stdout
 
 
+def test_blender_material_import_does_not_require_pandas() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    code = """
+import builtins
+real_import = builtins.__import__
+def blocked_import(name, *args, **kwargs):
+    if name == "pandas":
+        raise ModuleNotFoundError("No module named 'pandas'")
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = blocked_import
+from scripts import render_blender
+assert "flat" in render_blender.DEFAULT_CONFIG["textures"]
+"""
+    subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=repo_root,
+        check=True,
+    )
+
+
 def test_render_blender_config_loads_without_pyyaml(monkeypatch) -> None:
     real_import = builtins.__import__
 
@@ -62,7 +82,7 @@ def test_render_blender_config_loads_without_pyyaml(monkeypatch) -> None:
 
 
 def test_random_noise_material_mode_maps_to_existing_helper() -> None:
-    assert material_mode("random_noise") == "noise"
+    assert material_mode("random_noise") == "image_noise"
     assert material_mode("flat") == "flat"
 
 
@@ -89,7 +109,7 @@ class _FakeObject:
         self.preservable_material = preservable_material
 
 
-def test_modelnet_photorealistic_materials_fallback(monkeypatch) -> None:
+def test_textureless_photorealistic_materials_fallback(monkeypatch) -> None:
     calls = _install_fake_material_utils(monkeypatch)
     record = {
         "texture_condition": "photorealistic",
@@ -102,7 +122,7 @@ def test_modelnet_photorealistic_materials_fallback(monkeypatch) -> None:
 
     assert meta["material_status"] == "fallback"
     assert meta["photorealistic_material_status"] == "fallback_missing_original"
-    assert "modelnet40" in meta["photorealistic_fallback_reason"]
+    assert "raw_mesh_extension_textureless" in meta["photorealistic_fallback_reason"]
     assert calls[0]["texture_type"] == "photorealistic"
     assert calls[0]["preserve_existing"] is False
 
@@ -130,6 +150,23 @@ def test_photorealistic_fallback_reason_honors_manifest_flags() -> None:
     )
 
     assert reason == "manifest_marks_material_unavailable"
+
+
+def test_random_noise_material_uses_saved_image_texture(monkeypatch, tmp_path) -> None:
+    calls = _install_fake_material_utils(monkeypatch)
+    record = {
+        "texture_condition": "random_noise",
+        "texture_seed": 123,
+        "rgb_path": str(tmp_path / "render" / "rgb.png"),
+    }
+
+    meta = apply_materials([_FakeObject()], record, {})
+
+    assert meta["material_status"] == "random_noise_override"
+    assert meta["random_noise_texture_type"] == "image_texture"
+    assert meta["random_texture_path"].endswith("random_texture.png")
+    assert calls[0]["texture_type"] == "image_noise"
+    assert calls[0]["image_texture_path"] == meta["random_texture_path"]
 
 
 def test_blender_renderer_outputs_geometry_buffers(tmp_path) -> None:
@@ -314,9 +351,10 @@ def test_blender_material_triplet_preserves_geometry_buffers(tmp_path) -> None:
     status_by_texture = {row["texture_condition"]: row for row in read_jsonl(status)}
     assert set(status_by_texture) == {"photorealistic", "flat", "random_noise"}
     assert status_by_texture["photorealistic"]["material_status"] == "fallback"
-    assert status_by_texture["photorealistic"][
-        "photorealistic_material_status"
-    ] == "fallback_missing_original"
+    assert (
+        status_by_texture["photorealistic"]["photorealistic_material_status"]
+        == "fallback_missing_original"
+    )
 
     depth_ref = np.load(tmp_path / "flat" / "depth.npy")
     normal_ref = np.load(tmp_path / "flat" / "normal_camera.npy")

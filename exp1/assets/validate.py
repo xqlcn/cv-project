@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence, Union
 
@@ -22,6 +25,7 @@ REQUIRED_ASSET_COLUMNS = (
 )
 VALID_ASSET_STATUSES = {"discovered", "normalized", "failed"}
 VALID_SPLITS = {"train", "val", "test"}
+DEFAULT_SPLIT_FRACTIONS = {"train": 0.7, "val": 0.15, "test": 0.15}
 
 
 class AssetValidationError(ValueError):
@@ -52,6 +56,130 @@ def assert_object_disjoint_splits(
     if not leaking.empty:
         examples = ", ".join(str(idx) for idx in leaking.index[:8])
         raise AssetValidationError(f"Objects assigned to multiple splits: {examples}")
+
+
+def _stable_object_key(row: Mapping[str, Any], *, seed: int) -> str:
+    payload = {
+        "seed": int(seed),
+        "object_id": str(row.get("object_id", "")),
+        "source_dataset": str(row.get("source_dataset", "")),
+        "category": str(row.get("category", "")),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()
+
+
+def _normalized_fractions(
+    fractions: Mapping[str, Any],
+    labels: Sequence[str],
+) -> list[float]:
+    values = []
+    for label in labels:
+        value = float(fractions.get(label, 0.0))
+        if value < 0:
+            raise AssetValidationError(f"Split fraction for {label!r} is negative")
+        values.append(value)
+    total = float(sum(values))
+    if total <= 0:
+        raise AssetValidationError("Split fractions must sum to a positive value")
+    return [value / total for value in values]
+
+
+def _split_counts(
+    n_objects: int,
+    *,
+    labels: Sequence[str],
+    fractions: Mapping[str, Any],
+) -> list[int]:
+    if n_objects <= 0:
+        return [0 for _ in labels]
+    normalized = _normalized_fractions(fractions, labels)
+    raw = [n_objects * fraction for fraction in normalized]
+    counts = [int(math.floor(value)) for value in raw]
+    remainder = n_objects - sum(counts)
+    order = sorted(
+        range(len(labels)),
+        key=lambda idx: (raw[idx] - counts[idx], normalized[idx]),
+        reverse=True,
+    )
+    for idx in order[:remainder]:
+        counts[idx] += 1
+
+    positive = [idx for idx, fraction in enumerate(normalized) if fraction > 0]
+    if n_objects >= len(positive):
+        for idx in positive:
+            if counts[idx] > 0:
+                continue
+            donors = [donor for donor in positive if donor != idx and counts[donor] > 1]
+            if not donors:
+                continue
+            donor = max(
+                donors,
+                key=lambda donor_idx: (
+                    counts[donor_idx] - raw[donor_idx],
+                    counts[donor_idx],
+                ),
+            )
+            counts[donor] -= 1
+            counts[idx] += 1
+    return counts
+
+
+def assign_object_disjoint_splits(
+    rows: Union[pd.DataFrame, Iterable[Mapping[str, Any]]],
+    *,
+    fractions: Mapping[str, Any] = DEFAULT_SPLIT_FRACTIONS,
+    labels: Sequence[str] = ("train", "val", "test"),
+    seed: int = 0,
+) -> list[dict[str, Any]]:
+    """Assign deterministic object-disjoint splits from configured fractions.
+
+    The assignment is based on one stable hash per object and is then joined
+    back to every row by ``object_id``. This keeps all renders/meshes for an
+    object in one split even when the input manifest has duplicate rows.
+    """
+    df = _as_dataframe(rows)
+    missing = _missing_columns(df, ("object_id", "source_dataset", "category"))
+    if missing:
+        raise AssetValidationError(
+            "Missing split assignment columns: " + ", ".join(missing)
+        )
+
+    labels = [str(label) for label in labels]
+    invalid_labels = sorted(set(labels) - VALID_SPLITS)
+    if invalid_labels:
+        raise AssetValidationError(f"Invalid split labels: {invalid_labels}")
+
+    object_rows = (
+        df.loc[:, ["object_id", "source_dataset", "category"]]
+        .drop_duplicates(subset=["object_id"])
+        .to_dict(orient="records")
+    )
+    object_rows = sorted(
+        object_rows,
+        key=lambda row: _stable_object_key(row, seed=int(seed)),
+    )
+    counts = _split_counts(
+        len(object_rows),
+        labels=labels,
+        fractions=fractions,
+    )
+
+    assignments: dict[str, str] = {}
+    cursor = 0
+    for label, count in zip(labels, counts):
+        for row in object_rows[cursor : cursor + count]:
+            assignments[str(row["object_id"])] = label
+        cursor += count
+
+    out = df.copy()
+    if "split" in out.columns:
+        out["split_original"] = out["split"].astype(str)
+    out["split"] = out["object_id"].astype(str).map(assignments)
+    out["split_assignment_method"] = "deterministic_fraction"
+    out["split_assignment_seed"] = int(seed)
+    assert_object_disjoint_splits(out)
+    return out.to_dict(orient="records")
 
 
 def validate_asset_manifest(

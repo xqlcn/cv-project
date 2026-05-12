@@ -69,6 +69,86 @@ python scripts/setup_synthetic_primitives.py
 
 Creates `data/synthetic_primitives/train/*.obj`, `val/*.obj`, and `catalog.json`.
 
+## 2b) ShapeNetCore from Hugging Face
+
+After your Hugging Face account has access to the gated
+`ShapeNet/ShapeNetCore` repository, log in locally and preprocess a small
+category subset first:
+
+```bash
+huggingface-cli login
+python scripts/preprocess_assets.py \
+  --config configs/exp1_mvp.yaml \
+  --shapenet-hf-repo-id ShapeNet/ShapeNetCore \
+  --shapenet-hf-local-dir data/shapenet_hf/ShapeNetCore \
+  --shapenet-category chair \
+  --shapenet-category table \
+  --max-objects 50 \
+  --overwrite
+```
+
+`ShapeNet/ShapeNetCore` is stored as per-category synset ZIPs; preprocessing
+downloads only the requested category ZIPs when `--shapenet-category` is set,
+extracts them into `data/shapenet_hf/extracted/`, and normalizes the meshes.
+This writes the normal Experiment 1 asset manifests under `data/exp1/manifests/`
+and normalized GLBs under `data/exp1/normalized_assets/`, so downstream render
+planning can keep using:
+
+```bash
+python scripts/create_render_plan.py \
+  --config configs/exp1_mvp.yaml \
+  --asset-manifest data/exp1/manifests/assets_normalized.jsonl
+```
+
+Once you have access to the GLB mirror, use the same command with
+`--shapenet-hf-repo-id ShapeNet/shapenetcore-glb` and a separate local dir such
+as `data/shapenet_hf/shapenetcore-glb`.
+Use `--shapenet-no-download` with `--shapenet-hf-local-dir` to scan an existing
+snapshot without contacting Hugging Face.
+
+## 2c) Experiment 1 smoke pipeline
+
+The safe smoke command prepares a tiny synthetic asset catalog, writes an
+Experiment 1 render plan, exports JSONL render chunks, and creates a Blender
+shell script. Stages are idempotent; rerunning the command skips outputs that
+already exist unless `--force` is passed.
+
+```bash
+make exp1-smoke
+```
+
+Render the prepared chunks with Blender:
+
+```bash
+bash data/exp1/manifests/render_chunks/run_blender_chunks.sh
+```
+
+After Blender finishes, build QC, labels, features, probes, aggregated results,
+and figures:
+
+```bash
+make exp1-smoke-post
+```
+
+Equivalent direct runner commands:
+
+```bash
+PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_smoke.yaml \
+  --stages smoke_prepare
+
+PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_smoke.yaml \
+  --stages post_render ml
+```
+
+Standalone reporting commands:
+
+```bash
+PYTHONPATH=. python scripts/aggregate_exp1_results.py --config configs/exp1_smoke.yaml
+PYTHONPATH=. python scripts/make_exp1_figures.py --config configs/exp1_smoke.yaml
+```
+
 ## 3) Rendered sample schema (ModelNet + synthetic + future corpora)
 
 Each **rendered** training sample is a flat dict (one **view** per row when `flatten_views=True`):

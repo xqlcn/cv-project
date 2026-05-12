@@ -69,9 +69,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "photorealistic": {
             "preserve_imported_materials": True,
             "fallback_color_rgb": [0.68, 0.68, 0.68],
-            "textureless_source_datasets": ["modelnet40", "synthetic_primitives"],
+            "textureless_source_datasets": ["synthetic_primitives"],
         },
-        "random_noise": {"scale_range": [8.0, 20.0], "detail": 6.0},
+        "random_noise": {
+            "texture_size": [256, 256],
+            "color_space": "sRGB",
+            "scale_range": [8.0, 20.0],
+            "detail": 6.0,
+        },
     },
     "lighting_grid": {"fill_intensity": 0.35},
 }
@@ -391,8 +396,7 @@ def _record_output_paths(
             _resolve(project_root, record.get("rgb_path")) or output_dir / "rgb.png"
         ),
         "depth_path": (
-            _resolve(project_root, record.get("depth_path"))
-            or output_dir / "depth.npy"
+            _resolve(project_root, record.get("depth_path")) or output_dir / "depth.npy"
         ),
         "normal_path": (
             _resolve(project_root, record.get("normal_path"))
@@ -408,16 +412,29 @@ def _record_output_paths(
     }
 
 
-def _mesh_path(record: Mapping[str, Any], project_root: Path) -> Path:
-    mesh = (
-        record.get("normalized_mesh_path")
-        or record.get("raw_mesh_path")
-        or record.get("mesh_path")
+BLENDER_IMPORTABLE_TEXTURE_EXTENSIONS = {".obj", ".glb", ".gltf", ".fbx", ".ply"}
+
+
+def _mesh_path(record: Mapping[str, Any], project_root: Path) -> tuple[Path, str]:
+    raw = _resolve(
+        project_root,
+        record.get("raw_mesh_path") or record.get("mesh_path"),
     )
-    resolved = _resolve(project_root, mesh)
+    normalized = _resolve(project_root, record.get("normalized_mesh_path"))
+    if (
+        str(record.get("texture_condition", "")).lower() == "photorealistic"
+        and raw is not None
+        and raw.suffix.lower() in BLENDER_IMPORTABLE_TEXTURE_EXTENSIONS
+        and raw.is_file()
+    ):
+        return raw, "raw_mesh_path"
+
+    resolved = normalized or raw
     if resolved is None or not resolved.is_file():
+        mesh = record.get("normalized_mesh_path") or record.get("raw_mesh_path")
         raise FileNotFoundError(f"Missing mesh path for render row: {mesh}")
-    return resolved
+    source = "normalized_mesh_path" if resolved == normalized else "raw_mesh_path"
+    return resolved, source
 
 
 def _mesh_objects() -> List[Any]:
@@ -435,7 +452,8 @@ def _prepare_scene(
     configure_render(cfg)
     set_world_color(cfg)
 
-    obj = import_mesh(str(_mesh_path(record, project_root)))
+    mesh_path, mesh_source = _mesh_path(record, project_root)
+    obj = import_mesh(str(mesh_path))
     center_and_normalize(obj)
     scale = float(record.get("object_scale", 1.0))
     obj.scale = (scale, scale, scale)
@@ -446,7 +464,11 @@ def _prepare_scene(
     cam_obj = setup_camera(record, cfg)
     light_meta = setup_lighting(record, cfg)
     bpy.context.view_layer.update()
-    return cam_obj, light_meta, material_meta
+    mesh_meta = {
+        "mesh_import_path": str(mesh_path),
+        "mesh_import_source_column": mesh_source,
+    }
+    return cam_obj, light_meta, material_meta, mesh_meta
 
 
 def _write_rgb(path: Path) -> None:
@@ -466,7 +488,11 @@ def render_record(
     for path in output_paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    cam_obj, light_meta, material_meta = _prepare_scene(record, cfg, project_root)
+    cam_obj, light_meta, material_meta, mesh_meta = _prepare_scene(
+        record,
+        cfg,
+        project_root,
+    )
     _write_rgb(output_paths["rgb_path"])
 
     scene = bpy.context.scene
@@ -496,6 +522,7 @@ def render_record(
         "blender_version": bpy.app.version_string,
         "render_elapsed_sec": time.time() - start,
         "buffer_shapes": buffer_shapes(buffers),
+        **mesh_meta,
         **material_meta,
         **camera_metadata(cam_obj),
         **light_meta,

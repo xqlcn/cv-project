@@ -160,6 +160,34 @@ def test_modelnet40_rows_are_supported_and_split_is_inferred(tmp_path) -> None:
     assert by_object.loc["chair_chair_0001", "normalized_mesh_path"] == str(train_mesh)
 
 
+def test_asset_material_metadata_is_preserved_for_render_plan(tmp_path) -> None:
+    plan = _build_plan(
+        [
+            {
+                "object_id": "chair_abc123",
+                "source_dataset": "shapenet",
+                "category": "chair",
+                "split": "train",
+                "raw_mesh_path": (
+                    "data/shapenet/03001627/abc123/models/model_normalized.obj"
+                ),
+                "normalized_mesh_path": "data/normalized/chair_abc123.glb",
+                "has_photorealistic_material": True,
+                "hf_repo_id": "ShapeNet/ShapeNetCore",
+                "shapenet_synset_id": "03001627",
+                "shapenet_model_id": "abc123",
+            }
+        ],
+        tmp_path,
+    )
+
+    first = plan.iloc[0]
+    assert bool(first["has_photorealistic_material"]) is True
+    assert first["hf_repo_id"] == "ShapeNet/ShapeNetCore"
+    assert first["shapenet_synset_id"] == "03001627"
+    assert first["shapenet_model_id"] == "abc123"
+
+
 def test_load_asset_manifest_accepts_modelnet_json(tmp_path) -> None:
     manifest_path = tmp_path / "modelnet40_manifest.json"
     rows = [

@@ -3,6 +3,7 @@ torch>=2.1.0
 torchvision>=0.16.0
 
 transformers>=4.38.0
+huggingface_hub>=0.20.0
 open-clip-torch>=2.24.0
 accelerate>=0.27.0
 

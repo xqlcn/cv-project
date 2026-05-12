@@ -19,11 +19,13 @@ paths:
   results_dir: ${paths.project_root}/outputs/exp1/results
   figures_dir: ${paths.project_root}/outputs/exp1/figures
   logs_dir: ${paths.project_root}/outputs/exp1/logs
+  shapenet_hf_root: ${paths.project_root}/data/shapenet_hf/ShapeNetCore
+  shapenet_hf_extracted_root: ${paths.project_root}/data/shapenet_hf/extracted
+  objaverse_root: ${paths.project_root}/data/objaverse
 
 assets:
-  # Early tasks can use the synthetic primitive catalog already produced by
-  # scripts/setup_synthetic_primitives.py; later tasks can add ShapeNet or
-  # Objaverse sources here without changing downstream configs.
+  # Experiment 1 defaults to local ShapeNetCore and Objaverse meshes. Keep the
+  # synthetic source disabled as a tiny fixture path for tests and smoke demos.
   sources:
     - name: synthetic_primitives
       type: synthetic_manifest
@@ -35,26 +37,41 @@ assets:
       mesh_path_key: mesh_path
       raw_mesh_path_key: mesh_path
       normalized_mesh_path_key: mesh_path
-      enabled: true
+      enabled: false
     - name: modelnet40
       type: modelnet40
       root: ${paths.project_root}/data/modelnet40
       source_dataset: modelnet40
       enabled: false
-    - name: shapenet
-      type: mesh_directory
-      root: null
+    - name: shapenet_hf
+      type: huggingface_shapenet
+      repo_id: ShapeNet/ShapeNetCore
+      local_dir: ${paths.shapenet_hf_root}
+      revision: null
+      token: true
+      download: false
+      # Set this before enabling the source to avoid downloading all ShapeNet.
+      categories: []
+      allow_patterns: null
+      ignore_patterns: ["*.md", "*.txt"]
+      extract_archives: true
+      extracted_dir: ${paths.shapenet_hf_extracted_root}
+      overwrite_extract: false
       source_dataset: shapenet
-      enabled: false
+      enabled: true
     - name: objaverse
-      type: mesh_directory
-      root: null
+      type: objaverse
+      root: ${paths.objaverse_root}
       source_dataset: objaverse
-      enabled: false
+      enabled: true
+      skip_missing: true
   allowed_extensions: [".obj", ".glb", ".gltf", ".fbx", ".ply", ".off"]
   max_objects: null
   require_normalized_mesh: false
-  split_from_manifest: true
+  # Assign object-disjoint splits from `splits.fractions` by default. Set this
+  # true only when the source manifest already has trustworthy train/val/test
+  # object splits that should be preserved.
+  split_from_manifest: false
 
 splits:
   object_disjoint: true

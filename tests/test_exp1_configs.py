@@ -84,6 +84,33 @@ def test_exp1_smoke_config_stays_tiny() -> None:
     assert max(int(x) for x in cfg.render.resolution) <= 128
 
 
+def test_exp1_shapenet_source_defaults_to_accessible_core_zip_repo() -> None:
+    cfg = _compose_with_omegaconf("exp1_smoke")
+    sources = {str(source.name): source for source in cfg.assets.sources}
+
+    assert sources["shapenet_hf"].repo_id == "ShapeNet/ShapeNetCore"
+    assert str(cfg.paths.shapenet_hf_root).endswith("data/shapenet_hf/ShapeNetCore")
+    assert sources["shapenet_hf"].download is False
+    assert sources["shapenet_hf"].enabled is True
+
+
+def test_exp1_default_sources_are_shapenetcore_and_objaverse() -> None:
+    cfg = _compose_with_omegaconf("exp1_smoke")
+    sources = {str(source.name): source for source in cfg.assets.sources}
+
+    assert sources["modelnet40"].enabled is False
+    assert sources["synthetic_primitives"].enabled is False
+    assert sources["objaverse"].enabled is True
+    assert str(cfg.paths.objaverse_root).endswith("data/objaverse")
+
+
+def test_exp1_full_probe_tasks_have_label_paths() -> None:
+    cfg = _compose_with_omegaconf("exp1_full")
+
+    for task in cfg.tasks.enabled:
+        assert cfg.tasks.definitions[task].get("label_path") is not None
+
+
 @pytest.mark.parametrize("config_name", CONFIG_NAMES)
 def test_exp1_configs_do_not_require_local_absolute_paths(config_name: str) -> None:
     cfg = _compose_with_omegaconf(config_name)

@@ -37,7 +37,7 @@ textures:
     fallback_color_rgb: [0.68, 0.68, 0.68]
     fallback_roughness: 0.55
     record_fallback_status: true
-    textureless_source_datasets: ["modelnet40", "synthetic_primitives"]
+    textureless_source_datasets: ["synthetic_primitives"]
   flat:
     color_rgb: [0.62, 0.62, 0.62]
     roughness: 0.55
@@ -72,7 +72,7 @@ render_plan:
   id_version: v1
   seed: ${experiment.seed}
   include_failed_rows: true
-  preserve_split_labels: true
+  preserve_split_labels: false
   texture_control_fields:
     - object_id
     - camera_distance

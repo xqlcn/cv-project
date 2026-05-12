@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 import pandas as pd
 from omegaconf import DictConfig, OmegaConf
 
+from exp1.assets.validate import assign_object_disjoint_splits
 from exp1.metadata.manifest import load_manifest, validate_render_manifest
 from exp1.metadata.schema import VALID_TEXTURE_CONDITIONS, generate_render_id
 
@@ -21,6 +22,16 @@ DEFAULT_OUTPUT_CONTRACT = {
     "normal_filename": "normal_camera.npy",
     "mask_filename": "mask.npy",
 }
+
+OPTIONAL_ASSET_METADATA_KEYS = (
+    "has_photorealistic_material",
+    "photorealistic_material_available",
+    "has_imported_material",
+    "hf_repo_id",
+    "hf_revision",
+    "shapenet_synset_id",
+    "shapenet_model_id",
+)
 
 
 def _stable_int(parts: Iterable[Any], *, modulo: int = 2**31 - 1) -> int:
@@ -88,7 +99,7 @@ def normalize_asset_record(
     source_dataset: Optional[str] = None,
     default_split: str = "train",
 ) -> Dict[str, Any]:
-    """Normalize a synthetic/ModelNet-style asset row into render-plan fields."""
+    """Normalize a mesh asset row into render-plan fields."""
     object_id = _get_first(row, ("object_id", "id", "uid"))
     if object_id is None:
         raise ValueError("Asset row is missing object_id")
@@ -110,7 +121,7 @@ def normalize_asset_record(
     )
     dataset = _get_first(row, ("source_dataset", "dataset", "dataset_name"))
 
-    return {
+    out: Dict[str, Any] = {
         "object_id": str(object_id),
         "source_dataset": str(dataset or source_dataset or "unknown"),
         "category": str(row.get("category", "unknown")),
@@ -122,6 +133,10 @@ def normalize_asset_record(
         "raw_mesh_path": str(raw_mesh_path),
         "normalized_mesh_path": str(normalized_mesh_path or raw_mesh_path),
     }
+    for key in OPTIONAL_ASSET_METADATA_KEYS:
+        if key in row:
+            out[key] = row[key]
+    return out
 
 
 def normalize_asset_records(
@@ -313,8 +328,32 @@ def build_render_plan_from_config(
     if max_objects_value is None:
         max_objects_value = OmegaConf.select(cfg, "assets.max_objects")
 
+    rows = [dict(row) for row in asset_rows]
+    if not bool(OmegaConf.select(cfg, "assets.split_from_manifest", default=False)):
+        rows = normalize_asset_records(
+            rows,
+            max_objects=max_objects_value,
+        )
+        rows = assign_object_disjoint_splits(
+            rows,
+            fractions=OmegaConf.to_container(
+                OmegaConf.select(cfg, "splits.fractions"),
+                resolve=True,
+            ),
+            labels=[
+                str(label)
+                for label in OmegaConf.select(
+                    cfg,
+                    "splits.labels",
+                    default=("train", "val", "test"),
+                )
+            ],
+            seed=int(OmegaConf.select(cfg, "splits.seed", default=0)),
+        )
+        max_objects_value = None
+
     return build_render_plan(
-        asset_rows,
+        rows,
         texture_conditions=list(cfg.textures.conditions),
         camera_distances=list(cfg.camera_grid.distances),
         camera_azimuths_deg=list(cfg.camera_grid.azimuths_deg),
