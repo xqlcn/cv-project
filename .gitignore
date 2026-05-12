@@ -1,5 +1,7 @@
 outputs
 data
+!exp1/data/
+!exp1/data/**/*.py
 depth_exps
 snorm_exps
 
