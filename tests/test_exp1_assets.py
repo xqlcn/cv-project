@@ -1,0 +1,538 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+import trimesh
+
+from exp1.assets.discover import (
+    discover_assets_from_directory,
+    discover_modelnet40_assets,
+)
+from exp1.assets.normalize import normalize_asset_manifest
+from exp1.assets.objaverse import bytes_from_gb, select_objaverse_lvis_uids
+from exp1.assets.shapenet import (
+    DEFAULT_SHAPENET_HF_REPO_ID,
+    SHAPENETCORE_GLB_HF_REPO_ID,
+    SHAPENETCORE_ZIP_HF_REPO_ID,
+    discover_huggingface_shapenet_assets,
+)
+from exp1.assets.validate import (
+    AssetValidationError,
+    assign_object_disjoint_splits,
+    build_object_split_manifest,
+    validate_asset_manifest,
+    write_object_split_manifest,
+)
+from scripts.preprocess_assets import _interleave_source_rows
+from src.utils.io import read_jsonl
+
+
+def _write_box(
+    path: Path,
+    *,
+    extents=(2.0, 4.0, 6.0),
+    translation=(5.0, 0.0, -3.0),
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mesh = trimesh.creation.box(extents=extents)
+    mesh.apply_translation(translation)
+    mesh.export(path)
+
+
+def test_discover_assets_from_directory_finds_supported_meshes(tmp_path) -> None:
+    mesh_path = tmp_path / "train" / "chair" / "chair_0001.obj"
+    _write_box(mesh_path)
+    ignored = tmp_path / "train" / "chair" / "notes.txt"
+    ignored.write_text("not a mesh", encoding="utf-8")
+
+    rows = discover_assets_from_directory(tmp_path, source_dataset="unit")
+
+    assert len(rows) == 1
+    assert rows[0]["object_id"] == "chair_0001"
+    assert rows[0]["source_dataset"] == "unit"
+    assert rows[0]["category"] == "chair"
+    assert rows[0]["split"] == "train"
+    assert rows[0]["raw_mesh_path"] == str(mesh_path.resolve())
+
+
+def test_discover_modelnet40_assets_uses_existing_repo_scanner(tmp_path) -> None:
+    mesh_path = tmp_path / "train" / "chair" / "chair_0001.off"
+    _write_box(mesh_path)
+
+    rows = discover_modelnet40_assets(tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0]["object_id"] == "chair_chair_0001"
+    assert rows[0]["source_dataset"] == "modelnet40"
+    assert rows[0]["split"] == "train"
+    assert rows[0]["raw_mesh_path"] == str(mesh_path.resolve())
+
+
+def test_shapenet_default_repo_matches_current_access() -> None:
+    assert DEFAULT_SHAPENET_HF_REPO_ID == SHAPENETCORE_ZIP_HF_REPO_ID
+    assert SHAPENETCORE_GLB_HF_REPO_ID == "ShapeNet/shapenetcore-glb"
+
+
+def test_discover_huggingface_shapenet_glb_snapshot(tmp_path) -> None:
+    mesh_path = tmp_path / "snapshot" / "chair" / "1a2b3c.glb"
+    _write_box(mesh_path)
+
+    rows = discover_huggingface_shapenet_assets(
+        local_dir=tmp_path / "snapshot",
+        download=False,
+        categories=["chair"],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["object_id"] == "chair_1a2b3c"
+    assert rows[0]["source_dataset"] == "shapenet"
+    assert rows[0]["category"] == "chair"
+    assert rows[0]["split"] == "train"
+    assert rows[0]["raw_mesh_path"] == str(mesh_path.resolve())
+    assert rows[0]["has_photorealistic_material"] is True
+    assert rows[0]["shapenet_synset_id"] == "03001627"
+
+
+def test_discover_huggingface_shapenet_zip_snapshot(tmp_path) -> None:
+    raw_obj = tmp_path / "source.obj"
+    _write_box(raw_obj)
+    snapshot = tmp_path / "snapshot"
+    archive_path = snapshot / "03001627.zip"
+    archive_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.write(
+            raw_obj,
+            arcname="03001627/abc123/models/model_normalized.obj",
+        )
+
+    rows = discover_huggingface_shapenet_assets(
+        local_dir=snapshot,
+        download=False,
+        categories=["chair"],
+        extracted_dir=tmp_path / "extracted",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["object_id"] == "chair_abc123"
+    assert rows[0]["category"] == "chair"
+    assert rows[0]["shapenet_synset_id"] == "03001627"
+    assert rows[0]["shapenet_model_id"] == "abc123"
+    assert Path(rows[0]["raw_mesh_path"]).is_file()
+
+
+def test_normalize_asset_manifest_writes_centered_unit_glb(tmp_path) -> None:
+    raw = tmp_path / "raw" / "train" / "box" / "box_0001.obj"
+    _write_box(raw)
+    rows = [
+        {
+            "object_id": "box_0001",
+            "source_dataset": "unit",
+            "category": "box",
+            "split": "train",
+            "raw_mesh_path": str(raw),
+            "normalized_mesh_path": "",
+            "asset_status": "discovered",
+            "asset_error_message": "",
+        }
+    ]
+
+    normalized = normalize_asset_manifest(rows, output_root=tmp_path / "normalized")
+    validate_asset_manifest(normalized)
+
+    out_path = Path(normalized[0]["normalized_mesh_path"])
+    mesh = trimesh.load(out_path, force="mesh")
+    bounds = np.asarray(mesh.bounds)
+    center = (bounds[0] + bounds[1]) / 2.0
+    max_extent = float((bounds[1] - bounds[0]).max())
+
+    assert out_path.suffix == ".glb"
+    assert np.allclose(center, np.zeros(3), atol=1e-6)
+    assert max_extent == pytest.approx(1.0, abs=1e-6)
+    assert normalized[0]["asset_status"] == "normalized"
+
+
+def test_invalid_mesh_is_marked_without_crashing(tmp_path) -> None:
+    raw = tmp_path / "bad.obj"
+    raw.write_text("this is not a mesh", encoding="utf-8")
+    rows = [
+        {
+            "object_id": "bad",
+            "source_dataset": "unit",
+            "category": "bad",
+            "split": "train",
+            "raw_mesh_path": str(raw),
+            "normalized_mesh_path": "",
+            "asset_status": "discovered",
+            "asset_error_message": "",
+        }
+    ]
+
+    normalized = normalize_asset_manifest(rows, output_root=tmp_path / "normalized")
+    validate_asset_manifest(normalized)
+
+    assert normalized[0]["asset_status"] == "failed"
+    assert normalized[0]["asset_error_message"]
+    assert normalized[0]["normalized_mesh_path"] == ""
+
+
+def test_object_split_manifest_is_disjoint(tmp_path) -> None:
+    rows = [
+        {
+            "object_id": "a",
+            "source_dataset": "unit",
+            "category": "box",
+            "split": "train",
+        },
+        {
+            "object_id": "b",
+            "source_dataset": "unit",
+            "category": "box",
+            "split": "val",
+        },
+    ]
+
+    split_rows = build_object_split_manifest(rows)
+    split_path = write_object_split_manifest(rows, tmp_path / "splits.jsonl")
+
+    assert {row["object_id"] for row in split_rows} == {"a", "b"}
+    assert split_path.is_file()
+    assert read_jsonl(split_path) == split_rows
+
+
+def test_object_split_manifest_rejects_leakage() -> None:
+    rows = [
+        {
+            "object_id": "leaky",
+            "source_dataset": "unit",
+            "category": "box",
+            "split": "train",
+        },
+        {
+            "object_id": "leaky",
+            "source_dataset": "unit",
+            "category": "box",
+            "split": "test",
+        },
+    ]
+
+    with pytest.raises(AssetValidationError, match="multiple splits"):
+        build_object_split_manifest(rows)
+
+
+def test_assign_object_disjoint_splits_uses_configured_fractions() -> None:
+    rows = [
+        {
+            "object_id": f"object_{idx}",
+            "source_dataset": "unit",
+            "category": "box",
+            "split": "train",
+            "raw_mesh_path": f"object_{idx}.obj",
+            "normalized_mesh_path": "",
+            "asset_status": "discovered",
+            "asset_error_message": "",
+        }
+        for idx in range(10)
+    ]
+
+    first = assign_object_disjoint_splits(
+        rows,
+        fractions={"train": 0.6, "val": 0.2, "test": 0.2},
+        seed=99,
+    )
+    second = assign_object_disjoint_splits(
+        rows,
+        fractions={"train": 0.6, "val": 0.2, "test": 0.2},
+        seed=99,
+    )
+
+    counts = {split: 0 for split in ("train", "val", "test")}
+    for row in first:
+        counts[row["split"]] += 1
+
+    assert counts == {"train": 6, "val": 2, "test": 2}
+    assert [row["split"] for row in first] == [row["split"] for row in second]
+    assert {row["split_original"] for row in first} == {"train"}
+
+
+def test_preprocess_assets_script_supports_modelnet40(tmp_path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    mesh_path = tmp_path / "modelnet40" / "train" / "chair" / "chair_0001.off"
+    _write_box(mesh_path)
+    asset_manifest = tmp_path / "assets.jsonl"
+    normalized_manifest = tmp_path / "assets_normalized.jsonl"
+    split_manifest = tmp_path / "splits.jsonl"
+    normalized_root = tmp_path / "normalized"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/preprocess_assets.py",
+            "--config",
+            "configs/exp1_smoke.yaml",
+            "--modelnet-root",
+            str(tmp_path / "modelnet40"),
+            "--output-manifest",
+            str(asset_manifest),
+            "--normalized-manifest",
+            str(normalized_manifest),
+            "--split-manifest",
+            str(split_manifest),
+            "--normalized-root",
+            str(normalized_root),
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+
+    raw_rows = read_jsonl(asset_manifest)
+    normalized_rows = read_jsonl(normalized_manifest)
+    split_rows = read_jsonl(split_manifest)
+
+    assert len(raw_rows) == 1
+    assert len(normalized_rows) == 1
+    assert normalized_rows[0]["source_dataset"] == "modelnet40"
+    assert normalized_rows[0]["asset_status"] == "normalized"
+    assert Path(normalized_rows[0]["normalized_mesh_path"]).is_file()
+    assert split_rows == [
+        {
+            "object_id": "chair_chair_0001",
+            "source_dataset": "modelnet40",
+            "category": "chair",
+            "split": "train",
+        }
+    ]
+
+
+def test_preprocess_assets_script_supports_huggingface_shapenet_local_snapshot(
+    tmp_path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    mesh_path = (
+        tmp_path
+        / "shapenet"
+        / "03001627"
+        / "abc123"
+        / "models"
+        / "model_normalized.obj"
+    )
+    _write_box(mesh_path)
+    asset_manifest = tmp_path / "assets.jsonl"
+    normalized_manifest = tmp_path / "assets_normalized.jsonl"
+    split_manifest = tmp_path / "splits.jsonl"
+    normalized_root = tmp_path / "normalized"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/preprocess_assets.py",
+            "--config",
+            "configs/exp1_smoke.yaml",
+            "--shapenet-hf-local-dir",
+            str(tmp_path / "shapenet"),
+            "--shapenet-no-download",
+            "--shapenet-category",
+            "chair",
+            "--output-manifest",
+            str(asset_manifest),
+            "--normalized-manifest",
+            str(normalized_manifest),
+            "--split-manifest",
+            str(split_manifest),
+            "--normalized-root",
+            str(normalized_root),
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+
+    raw_rows = read_jsonl(asset_manifest)
+    normalized_rows = read_jsonl(normalized_manifest)
+    split_rows = read_jsonl(split_manifest)
+
+    assert len(raw_rows) == 1
+    assert raw_rows[0]["source_dataset"] == "shapenet"
+    assert raw_rows[0]["has_photorealistic_material"] is False
+    assert raw_rows[0]["shapenet_synset_id"] == "03001627"
+    assert raw_rows[0]["shapenet_model_id"] == "abc123"
+    assert len(normalized_rows) == 1
+    assert normalized_rows[0]["asset_status"] == "normalized"
+    assert Path(normalized_rows[0]["normalized_mesh_path"]).is_file()
+    assert split_rows == [
+        {
+            "object_id": "chair_abc123",
+            "source_dataset": "shapenet",
+            "category": "chair",
+            "split": "train",
+        }
+    ]
+
+
+def test_preprocess_assets_script_supports_objaverse_root(tmp_path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    mesh_path = tmp_path / "objaverse" / "train" / "chair" / "obj_0001.glb"
+    _write_box(mesh_path)
+    asset_manifest = tmp_path / "assets.jsonl"
+    normalized_manifest = tmp_path / "assets_normalized.jsonl"
+    split_manifest = tmp_path / "splits.jsonl"
+    normalized_root = tmp_path / "normalized"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/preprocess_assets.py",
+            "--config",
+            "configs/exp1_smoke.yaml",
+            "--objaverse-root",
+            str(tmp_path / "objaverse"),
+            "--output-manifest",
+            str(asset_manifest),
+            "--normalized-manifest",
+            str(normalized_manifest),
+            "--split-manifest",
+            str(split_manifest),
+            "--normalized-root",
+            str(normalized_root),
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+
+    raw_rows = read_jsonl(asset_manifest)
+    normalized_rows = read_jsonl(normalized_manifest)
+
+    assert len(raw_rows) == 1
+    assert raw_rows[0]["source_dataset"] == "objaverse"
+    assert raw_rows[0]["split"] == "train"
+    assert len(normalized_rows) == 1
+    assert normalized_rows[0]["asset_status"] == "normalized"
+    assert Path(normalized_rows[0]["normalized_mesh_path"]).is_file()
+
+
+def test_config_source_interleaving_does_not_starve_objaverse() -> None:
+    rows = _interleave_source_rows(
+        [
+            [{"source_dataset": "shapenet", "object_id": "s1"}],
+            [{"source_dataset": "objaverse", "object_id": "o1"}],
+        ],
+        max_objects=2,
+    )
+
+    assert [row["source_dataset"] for row in rows] == ["shapenet", "objaverse"]
+
+
+def test_objaverse_lvis_selection_is_deterministic_and_bounded() -> None:
+    annotations = {
+        "chair": ["uid3", "uid1"],
+        "table": ["uid2", "uid1"],
+    }
+
+    rows = select_objaverse_lvis_uids(
+        annotations,
+        categories=["chair", "table"],
+        max_objects=3,
+    )
+
+    assert rows == ["uid3", "uid1", "uid2"]
+    assert bytes_from_gb(0.5) == 536870912
+
+
+def test_objaverse_lvis_selection_accepts_common_category_aliases() -> None:
+    annotations = {
+        "car_(automobile)": ["uid1"],
+        "chair": ["uid2"],
+    }
+
+    rows = select_objaverse_lvis_uids(
+        annotations,
+        categories=["car", "chair"],
+    )
+
+    assert rows == ["uid1", "uid2"]
+
+
+def test_preprocess_assets_script_combines_shapenet_and_objaverse_cli(
+    tmp_path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    shapenet_mesh = (
+        tmp_path
+        / "shapenet"
+        / "03001627"
+        / "abc123"
+        / "models"
+        / "model_normalized.obj"
+    )
+    objaverse_mesh = tmp_path / "objaverse" / "train" / "chair" / "obj_0001.glb"
+    _write_box(shapenet_mesh)
+    _write_box(objaverse_mesh)
+    asset_manifest = tmp_path / "assets.jsonl"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/preprocess_assets.py",
+            "--config",
+            "configs/exp1_smoke.yaml",
+            "--shapenet-hf-local-dir",
+            str(tmp_path / "shapenet"),
+            "--shapenet-no-download",
+            "--objaverse-root",
+            str(tmp_path / "objaverse"),
+            "--output-manifest",
+            str(asset_manifest),
+            "--no-normalize",
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+
+    rows = read_jsonl(asset_manifest)
+
+    assert [row["source_dataset"] for row in rows] == ["shapenet", "objaverse"]
+
+
+def test_preprocess_assets_script_skips_missing_objaverse_cli_when_combined(
+    tmp_path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    shapenet_mesh = (
+        tmp_path
+        / "shapenet"
+        / "03001627"
+        / "abc123"
+        / "models"
+        / "model_normalized.obj"
+    )
+    _write_box(shapenet_mesh)
+    asset_manifest = tmp_path / "assets.jsonl"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/preprocess_assets.py",
+            "--config",
+            "configs/exp1_smoke.yaml",
+            "--shapenet-hf-local-dir",
+            str(tmp_path / "shapenet"),
+            "--shapenet-no-download",
+            "--objaverse-root",
+            str(tmp_path / "missing_objaverse"),
+            "--output-manifest",
+            str(asset_manifest),
+            "--no-normalize",
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    rows = read_jsonl(asset_manifest)
+
+    assert [row["source_dataset"] for row in rows] == ["shapenet"]
+    assert "Skipping asset source objaverse_cli" in result.stderr

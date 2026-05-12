@@ -1,0 +1,110 @@
+# @package _global_
+
+paths:
+  project_root: ${oc.env:CV_PROJECT_ROOT,.}
+  exp1_root: ${paths.project_root}/data/exp1
+  asset_manifest: ${paths.exp1_root}/manifests/assets.jsonl
+  normalized_asset_manifest: ${paths.exp1_root}/manifests/assets_normalized.jsonl
+  split_manifest: ${paths.exp1_root}/manifests/object_splits.jsonl
+  render_plan: ${paths.exp1_root}/manifests/render_plan.parquet
+  render_plan_jsonl: ${paths.exp1_root}/manifests/render_plan.jsonl
+  render_qc_manifest: ${paths.exp1_root}/manifests/render_qc.parquet
+  valid_render_manifest: ${paths.exp1_root}/manifests/render_valid.parquet
+  contact_sheet: ${paths.exp1_root}/qc/contact_sheet.png
+  render_chunks_dir: ${paths.exp1_root}/manifests/render_chunks
+  render_root: ${paths.exp1_root}/renders
+  labels_dir: ${paths.exp1_root}/labels
+  feature_dir: ${paths.exp1_root}/features
+  probe_output_dir: ${paths.project_root}/outputs/exp1/probes
+  results_dir: ${paths.project_root}/outputs/exp1/results
+  figures_dir: ${paths.project_root}/outputs/exp1/figures
+  logs_dir: ${paths.project_root}/outputs/exp1/logs
+  hf_cache_root: ${paths.project_root}/data/hf_cache
+  shapenet_hf_root: ${paths.project_root}/data/shapenet_hf/ShapeNetCore
+  shapenet_hf_extracted_root: ${paths.project_root}/data/shapenet_hf/extracted
+  objaverse_root: ${paths.project_root}/data/objaverse
+  objaverse_cache_root: ${paths.project_root}/data/objaverse_cache
+  objaverse_manifest: ${paths.exp1_root}/manifests/objaverse_assets.jsonl
+
+datasets:
+  shapenet:
+    # Keep this bounded by default; set EXP1_SHAPENET_DOWNLOAD=true only after
+    # accepting the dataset license and confirming local storage.
+    download: false
+    categories: ["airplane", "bench", "bottle", "car", "chair", "lamp", "sofa", "table"]
+    max_objects: 500
+  objaverse:
+    categories: ["chair", "table", "car", "airplane", "sofa", "lamp", "bottle", "mug"]
+    max_objects: 250
+    max_download_gb: 20.0
+    cache_dir: ${paths.objaverse_cache_root}
+    manifest_path: ${paths.objaverse_manifest}
+    download_processes: 4
+    batch_size: 8
+    split: train
+
+assets:
+  # Experiment 1 defaults to local ShapeNetCore and Objaverse meshes. Keep the
+  # synthetic source disabled as a tiny fixture path for tests and smoke demos.
+  sources:
+    - name: synthetic_primitives
+      type: synthetic_manifest
+      manifest_path: ${paths.project_root}/data/synthetic_primitives/catalog.json
+      source_dataset: synthetic_primitives
+      object_id_key: object_id
+      category_key: category
+      split_key: split
+      mesh_path_key: mesh_path
+      raw_mesh_path_key: mesh_path
+      normalized_mesh_path_key: mesh_path
+      enabled: false
+    - name: modelnet40
+      type: modelnet40
+      root: ${paths.project_root}/data/modelnet40
+      source_dataset: modelnet40
+      enabled: false
+    - name: shapenet_hf
+      type: huggingface_shapenet
+      repo_id: ShapeNet/ShapeNetCore
+      local_dir: ${paths.shapenet_hf_root}
+      revision: null
+      token: true
+      download: ${datasets.shapenet.download}
+      categories: ${datasets.shapenet.categories}
+      max_objects: ${datasets.shapenet.max_objects}
+      allow_patterns: null
+      ignore_patterns: ["*.md", "*.txt"]
+      extract_archives: true
+      extracted_dir: ${paths.shapenet_hf_extracted_root}
+      overwrite_extract: false
+      source_dataset: shapenet
+      enabled: true
+      skip_missing: true
+    - name: objaverse_manifest
+      type: manifest
+      manifest_path: ${paths.objaverse_manifest}
+      source_dataset: objaverse
+      enabled: true
+      skip_missing: true
+    - name: objaverse
+      type: objaverse
+      root: ${paths.objaverse_root}
+      source_dataset: objaverse
+      enabled: true
+      skip_missing: true
+  allowed_extensions: [".obj", ".glb", ".gltf", ".fbx", ".ply", ".off"]
+  max_objects: null
+  require_normalized_mesh: false
+  # Assign object-disjoint splits from `splits.fractions` by default. Set this
+  # true only when the source manifest already has trustworthy train/val/test
+  # object splits that should be preserved.
+  split_from_manifest: false
+
+splits:
+  object_disjoint: true
+  seed: ${experiment.seed}
+  labels: ["train", "val", "test"]
+  fractions:
+    train: 0.7
+    val: 0.15
+    test: 0.15

@@ -1,0 +1,86 @@
+# @package _global_
+
+render:
+  backend: blender
+  engine: CYCLES
+  resolution: [224, 224]
+  samples: 64
+  use_gpu: true
+  transparent_background: false
+  file_format: PNG
+  fail_fast: false
+  chunk_size: 128
+  output_contract:
+    rgb_filename: rgb.png
+    depth_filename: depth.npy
+    normal_filename: normal_camera.npy
+    mask_filename: mask.npy
+    metadata_filename: render_meta.json
+  camera:
+    fov_deg: 50.0
+    clip_start: 0.01
+    clip_end: 1000.0
+  world:
+    bg_color: [0.05, 0.05, 0.06, 1.0]
+  qc:
+    min_foreground_fraction: 0.01
+    max_foreground_fraction: 0.95
+    min_depth_valid_fraction: 0.9
+    normal_norm_tolerance: 0.1
+    depth_atol: 0.0001
+    normal_atol: 0.0001
+
+textures:
+  conditions: ["photorealistic", "flat", "random_noise"]
+  photorealistic:
+    preserve_imported_materials: true
+    fallback_color_rgb: [0.68, 0.68, 0.68]
+    fallback_roughness: 0.55
+    record_fallback_status: true
+    textureless_source_datasets: ["synthetic_primitives"]
+  flat:
+    color_rgb: [0.62, 0.62, 0.62]
+    roughness: 0.55
+    use_emission: false
+  random_noise:
+    deterministic: true
+    seed_offset: 100000
+    texture_size: [256, 256]
+    color_space: sRGB
+    category_correlated: false
+    scale_range: [8.0, 20.0]
+    detail: 6.0
+    roughness: 0.55
+
+camera_grid:
+  distances: [2.4]
+  azimuths_deg: [0.0, 90.0, 180.0, 270.0]
+  elevations_deg: [20.0]
+  fov_deg: ${render.camera.fov_deg}
+
+lighting_grid:
+  light_type: sun
+  azimuths_deg: [45.0]
+  elevations_deg: [35.0]
+  intensities: [3.0]
+  fill_intensity: 0.35
+
+scale_grid:
+  values: [1.0]
+
+render_plan:
+  id_version: v1
+  seed: ${experiment.seed}
+  include_failed_rows: true
+  preserve_split_labels: false
+  texture_control_fields:
+    - object_id
+    - camera_distance
+    - camera_azimuth_deg
+    - camera_elevation_deg
+    - camera_fov_deg
+    - object_scale
+    - light_type
+    - light_azimuth_deg
+    - light_elevation_deg
+    - light_intensity

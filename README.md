@@ -2,8 +2,8 @@
 
 This repo supports **frozen** CLIP / DINOv2 features + **linear probes**, plus two mesh pipelines:
 
-1. **Default (controlled):** synthetic primitives → `trimesh` + `pyrender` multi-view **RGB**, **depth**, **normal** maps (`src/datasets/synthetic_primitives.py`).
-2. **Realistic validation:** **ModelNet40** under `data/modelnet40/{train,test}/<category>/*.off` (`src/datasets/modelnet40_dataset.py`).
+1. **Experiment 1 controlled pipeline:** ShapeNetCore/Objaverse meshes → Blender texture controls → **RGB**, **depth**, **normal**, and **mask** buffers.
+2. **Smoke fixtures:** synthetic primitives for tiny local pipeline checks.
 
 An optional **Blender** path (`blender/render_dataset.py`) remains for high-quality chirality renders using a JSON manifest (no ShapeNet dependency).
 
@@ -13,7 +13,8 @@ An optional **Blender** path (`blender/render_dataset.py`) remains for high-qual
 - `src/rendering/` — multi-view pyrender backend (RGB / depth / normals)
 - `blender/` — headless Blender chirality pipeline + manifest
 - `configs/` — YAML / Hydra
-- `data/modelnet40/` — expected ModelNet40 root after download
+- `data/shapenet_hf/` — optional local ShapeNetCore snapshots/extractions
+- `data/objaverse/` and `data/objaverse_cache/` — optional local Objaverse assets/cache
 - `data/synthetic_primitives/` — generated `.obj` primitives + `catalog.json`
 
 ## Setup (Python)
@@ -40,7 +41,11 @@ pip install trimesh networkx scipy pyglet "Pillow>=10" imageio freetype-py six
 
 **Headless rendering:** on Linux servers you may need `export PYOPENGL_PLATFORM=osmesa` (and OSMesa installed) or EGL; on macOS the default often works for offscreen pyrender.
 
-## 1) ModelNet40 download
+## 1) Legacy ModelNet40 download
+
+ModelNet40 is kept only for legacy validation utilities. It is not the default
+Experiment 1 source because `.off` meshes do not provide photorealistic texture
+controls.
 
 Automatic (may fail if the server blocks bots; then use manual steps printed by the script):
 
@@ -68,6 +73,140 @@ python scripts/setup_synthetic_primitives.py
 ```
 
 Creates `data/synthetic_primitives/train/*.obj`, `val/*.obj`, and `catalog.json`.
+
+## 2b) ShapeNetCore from Hugging Face
+
+After your Hugging Face account has access to the gated
+`ShapeNet/ShapeNetCore` repository, log in locally and preprocess a small
+category subset first:
+
+```bash
+huggingface-cli login
+python scripts/preprocess_assets.py \
+  --config configs/exp1_mvp.yaml \
+  --shapenet-hf-repo-id ShapeNet/ShapeNetCore \
+  --shapenet-hf-local-dir data/shapenet_hf/ShapeNetCore \
+  --shapenet-category chair \
+  --shapenet-category table \
+  --max-objects 50 \
+  --overwrite
+```
+
+`ShapeNet/ShapeNetCore` is stored as per-category synset ZIPs; preprocessing
+downloads only the requested category ZIPs when `--shapenet-category` is set,
+extracts them into `data/shapenet_hf/extracted/`, and normalizes the meshes.
+This writes the normal Experiment 1 asset manifests under `data/exp1/manifests/`
+and normalized GLBs under `data/exp1/normalized_assets/`, so downstream render
+planning can keep using:
+
+```bash
+python scripts/create_render_plan.py \
+  --config configs/exp1_mvp.yaml \
+  --asset-manifest data/exp1/manifests/assets_normalized.jsonl
+```
+
+Once you have access to the GLB mirror, use the same command with
+`--shapenet-hf-repo-id ShapeNet/shapenetcore-glb` and a separate local dir such
+as `data/shapenet_hf/shapenetcore-glb`.
+Use `--shapenet-no-download` with `--shapenet-hf-local-dir` to scan an existing
+snapshot without contacting Hugging Face.
+
+## 2c) Objaverse Bounded Download
+
+Objaverse access is optional and bounded by config defaults in
+`configs/exp1/paths.yaml` (`datasets.objaverse.max_objects` and
+`datasets.objaverse.max_download_gb`). The downloader writes a normal asset
+manifest that `scripts/preprocess_assets.py` can consume alongside ShapeNet:
+
+```bash
+python scripts/download_objaverse_assets.py \
+  --config configs/exp1_mvp.yaml \
+  --category chair \
+  --category table \
+  --max-objects 50 \
+  --max-download-gb 5
+```
+
+Then prepare a render plan from configured ShapeNet/Objaverse sources without
+running Blender:
+
+```bash
+make exp1-mvp-plan
+```
+
+## 2d) Bounded Depth/Normal Run
+
+Use `configs/exp1_bounded.yaml` as the next non-toy scale-up config. It keeps
+the core geometry probes only:
+
+- `surface_normal_aggregate`;
+- `relative_depth_regions`.
+
+Before rendering, estimate the render count and storage:
+
+```bash
+make exp1-bounded-estimate
+```
+
+Prepare assets and render chunks without launching Blender:
+
+```bash
+make exp1-bounded-plan
+```
+
+Then render and finish the pipeline:
+
+```bash
+BLENDER_BIN="/Applications/Blender.app/Contents/MacOS/Blender" \
+  bash data/exp1_bounded/manifests/render_chunks/run_blender_chunks.sh
+
+HF_HOME=data/hf_cache PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_bounded.yaml \
+  --stages post_render ml
+```
+
+## 2e) Experiment 1 smoke pipeline
+
+The safe smoke command prepares a tiny synthetic asset catalog, writes an
+Experiment 1 render plan, exports JSONL render chunks, and creates a Blender
+shell script. Stages are idempotent; rerunning the command skips outputs that
+already exist unless `--force` is passed.
+
+```bash
+make exp1-smoke
+```
+
+Render the prepared chunks with Blender:
+
+```bash
+bash data/exp1/manifests/render_chunks/run_blender_chunks.sh
+```
+
+After Blender finishes, build QC, labels, features, probes, aggregated results,
+and figures:
+
+```bash
+make exp1-smoke-post
+```
+
+Equivalent direct runner commands:
+
+```bash
+PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_smoke.yaml \
+  --stages smoke_prepare
+
+PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_smoke.yaml \
+  --stages post_render ml
+```
+
+Standalone reporting commands:
+
+```bash
+PYTHONPATH=. python scripts/aggregate_exp1_results.py --config configs/exp1_smoke.yaml
+PYTHONPATH=. python scripts/make_exp1_figures.py --config configs/exp1_smoke.yaml
+```
 
 ## 3) Rendered sample schema (ModelNet + synthetic + future corpora)
 

@@ -3,6 +3,13 @@ data
 depth_exps
 snorm_exps
 
+# Experiment 1 generated artifacts. Kept explicit even though data/outputs are
+# ignored above, so the project contract is visible at the pipeline boundary.
+data/exp1/
+data/synthetic_primitives/
+outputs/exp1/
+outputs/hydra/
+
 
 # vim
 .*.swp
@@ -135,3 +142,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+AGENTS.md
+EXPERIMENT1_HANDOFF.md
+EXPERIMENT1_TASKS.md

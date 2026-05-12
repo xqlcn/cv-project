@@ -1,0 +1,57 @@
+defaults:
+  - exp1/paths
+  - exp1/render
+  - exp1/tasks
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.project_root}/outputs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+experiment:
+  name: exp1_mvp
+  seed: 42
+  description: Single-GPU MVP for texture-controlled geometry probes.
+
+assets:
+  max_objects: 50
+
+render:
+  resolution: [224, 224]
+  samples: 64
+  chunk_size: 128
+
+camera_grid:
+  distances: [2.4, 2.8]
+  azimuths_deg: [0.0, 90.0, 180.0, 270.0]
+  elevations_deg: [15.0, 30.0]
+
+lighting_grid:
+  azimuths_deg: [45.0, 135.0]
+  elevations_deg: [35.0]
+  intensities: [2.5, 4.0]
+
+scale_grid:
+  values: [0.9, 1.0, 1.1]
+
+models:
+  enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
+  layers: ["final", "layer4", "layer8", "layer12"]
+
+tasks:
+  enabled: ["surface_normal_aggregate", "relative_depth_regions"]
+
+probe:
+  epochs: 30
+  batch_size: 128
+  evaluation:
+    within_texture: true
+    cross_texture: true
+    bootstrap:
+      enabled: true
+      unit: object_id
+      n_resamples: 1000
+      seed: ${experiment.seed}
+
+train:
+  limit_samples: null

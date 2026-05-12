@@ -1,0 +1,60 @@
+defaults:
+  - exp1/paths
+  - exp1/render
+  - exp1/tasks
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.project_root}/outputs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+experiment:
+  name: exp1_full
+  seed: 123
+  description: Full Experiment 1 grid for final texture and layer analyses.
+
+assets:
+  max_objects: null
+
+render:
+  resolution: [512, 512]
+  samples: 128
+  chunk_size: 256
+
+camera_grid:
+  distances: [2.2, 2.6, 3.0]
+  azimuths_deg: [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+  elevations_deg: [10.0, 25.0, 40.0]
+
+lighting_grid:
+  azimuths_deg: [30.0, 120.0, 210.0, 300.0]
+  elevations_deg: [25.0, 45.0]
+  intensities: [1.5, 3.0, 5.0]
+
+scale_grid:
+  values: [0.8, 1.0, 1.2]
+
+models:
+  enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
+  layers: ["final", "layer4", "layer8", "layer12"]
+
+tasks:
+  enabled:
+    - surface_normal_aggregate
+    - relative_depth_regions
+    - camera_distance
+    - viewpoint
+    - lighting_direction
+    - lighting_intensity
+    - apparent_scale
+
+probe:
+  epochs: 50
+  batch_size: 256
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.0
+
+train:
+  limit_samples: null

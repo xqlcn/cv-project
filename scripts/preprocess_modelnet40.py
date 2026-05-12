@@ -31,7 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.datasets.modelnet40_dataset import discover_modelnet40_records
+from src.datasets.modelnet40_index import discover_modelnet40_records
 from src.rendering.mesh_renderer import MeshMultiviewRenderer, RenderConfig
 from src.utils.io import ensure_dir
 

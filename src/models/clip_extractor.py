@@ -22,7 +22,9 @@ class CLIPExtractorConfig:
     use_open_clip: bool = False
     open_clip_model: str = "ViT-B-16"
     open_clip_pretrained: str = "laion2b_s34b_b88k"
-    layers: Optional[List[int]] = None  # 1-based hidden_states index (HF); ignored for OpenCLIP
+    layers: Optional[List[int]] = (
+        None  # 1-based hidden_states index (HF); ignored for OpenCLIP
+    )
 
 
 class FrozenCLIPExtractor(nn.Module):
@@ -55,7 +57,7 @@ class FrozenCLIPExtractor(nn.Module):
             from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 
             vm = CLIPVisionModelWithProjection.from_pretrained(cfg.model_id)
-            self.hf_model = vm.vision_model
+            self.hf_model = vm
             self.hf_model.to(device)
             for p in self.hf_model.parameters():
                 p.requires_grad = False
@@ -64,7 +66,9 @@ class FrozenCLIPExtractor(nn.Module):
 
         self._eval_transform = transforms.Compose(
             [
-                transforms.Resize(cfg.image_size, interpolation=transforms.InterpolationMode.BICUBIC),
+                transforms.Resize(
+                    cfg.image_size, interpolation=transforms.InterpolationMode.BICUBIC
+                ),
                 transforms.CenterCrop(cfg.image_size),
                 transforms.ToTensor(),
                 transforms.Normalize(
@@ -76,14 +80,18 @@ class FrozenCLIPExtractor(nn.Module):
 
     def _pixel_values_from_pil(self, images: List[Image.Image]) -> torch.Tensor:
         if self.use_open_clip:
-            batch = torch.stack([self._open_clip_preprocess(im.convert("RGB")) for im in images])
+            batch = torch.stack(
+                [self._open_clip_preprocess(im.convert("RGB")) for im in images]
+            )
             return batch.to(self.device, non_blocking=True)
         assert self.processor is not None
         inputs = self.processor(images=images, return_tensors="pt")
         return inputs["pixel_values"].to(self.device, non_blocking=True)
 
     @torch.inference_mode()
-    def forward_image_tensor(self, pixel_values: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward_image_tensor(
+        self, pixel_values: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
         if self.use_open_clip:
             assert self.open_clip_model is not None
             emb = self.open_clip_model.encode_image(pixel_values)
@@ -94,7 +102,7 @@ class FrozenCLIPExtractor(nn.Module):
         outputs = self.hf_model(pixel_values=pixel_values, output_hidden_states=True)
         hs = outputs.hidden_states
         last = hs[-1]
-        cls = last[:, 0, :]
+        cls = outputs.image_embeds
         patch = last[:, 1:, :]
         cls = F.normalize(cls, dim=-1)
 
@@ -137,11 +145,15 @@ class FrozenCLIPExtractor(nn.Module):
                     entry["cls_final"] = feats["cls_final"][i].detach().cpu()
                 else:
                     if "patch_tokens_final" not in feats:
-                        raise ValueError("patch_mean token requires HF CLIP (disable use_open_clip).")
+                        raise ValueError(
+                            "patch_mean token requires HF CLIP (disable use_open_clip)."
+                        )
                     patch = feats["patch_tokens_final"][i]
                     entry["patch_mean"] = patch.mean(dim=0).detach().cpu()
 
                 if "layer_cls" in feats and feats["layer_cls"]:
-                    entry["layer_cls"] = {k: v[i].detach().cpu() for k, v in feats["layer_cls"].items()}
+                    entry["layer_cls"] = {
+                        k: v[i].detach().cpu() for k, v in feats["layer_cls"].items()
+                    }
                 results[p] = entry
         return results
