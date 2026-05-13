@@ -5,9 +5,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from exp1.metadata.manifest import load_manifest
 from exp1.metadata.schema import VALID_TEXTURE_CONDITIONS
-from exp1.rendering.grid import build_render_plan, load_asset_manifest
+from exp1.rendering.grid import (
+    build_render_plan,
+    build_sampled_render_plan,
+    load_asset_manifest,
+)
 
 
 CONTROL_FIELDS = [
@@ -132,34 +138,6 @@ def test_split_labels_are_preserved(tmp_path) -> None:
     assert list(observed["syn_sphere_0002"]) == ["test"]
 
 
-def test_modelnet40_rows_are_supported_and_split_is_inferred(tmp_path) -> None:
-    train_mesh = tmp_path / "modelnet40" / "train" / "chair" / "chair_0001.off"
-    test_mesh = tmp_path / "modelnet40" / "test" / "chair" / "chair_0002.off"
-    rows = [
-        {
-            "object_id": "chair_chair_0001",
-            "dataset": "modelnet40",
-            "category": "chair",
-            "mesh_path": str(train_mesh),
-        },
-        {
-            "object_id": "chair_chair_0002",
-            "dataset": "modelnet40",
-            "category": "chair",
-            "mesh_path": str(test_mesh),
-        },
-    ]
-
-    plan = _build_plan(rows, tmp_path)
-
-    by_object = plan.groupby("object_id").first()
-    assert by_object.loc["chair_chair_0001", "split"] == "train"
-    assert by_object.loc["chair_chair_0002", "split"] == "test"
-    assert set(plan["source_dataset"]) == {"modelnet40"}
-    assert by_object.loc["chair_chair_0001", "raw_mesh_path"] == str(train_mesh)
-    assert by_object.loc["chair_chair_0001", "normalized_mesh_path"] == str(train_mesh)
-
-
 def test_asset_material_metadata_is_preserved_for_render_plan(tmp_path) -> None:
     plan = _build_plan(
         [
@@ -188,14 +166,14 @@ def test_asset_material_metadata_is_preserved_for_render_plan(tmp_path) -> None:
     assert first["shapenet_model_id"] == "abc123"
 
 
-def test_load_asset_manifest_accepts_modelnet_json(tmp_path) -> None:
-    manifest_path = tmp_path / "modelnet40_manifest.json"
+def test_load_asset_manifest_accepts_synthetic_json(tmp_path) -> None:
+    manifest_path = tmp_path / "synthetic_manifest.json"
     rows = [
         {
-            "object_id": "chair_chair_0001",
+            "object_id": "syn_chair_0001",
             "category": "chair",
-            "mesh_path": "data/modelnet40/train/chair/chair_0001.off",
-            "dataset": "modelnet40",
+            "mesh_path": "data/synthetic_primitives/train/syn_chair_0001.obj",
+            "dataset": "synthetic_primitives",
         }
     ]
     manifest_path.write_text(json.dumps(rows), encoding="utf-8")
@@ -211,10 +189,11 @@ def test_create_render_plan_script_writes_jsonl(tmp_path) -> None:
     output = tmp_path / "render_plan.jsonl"
     rows = [
         {
-            "object_id": "chair_chair_0001",
+            "object_id": "syn_chair_0001",
             "category": "chair",
-            "mesh_path": "data/modelnet40/train/chair/chair_0001.off",
-            "dataset": "modelnet40",
+            "split": "train",
+            "mesh_path": "data/synthetic_primitives/train/syn_chair_0001.obj",
+            "dataset": "synthetic_primitives",
         }
     ]
     asset_manifest.write_text(json.dumps(rows), encoding="utf-8")
@@ -238,3 +217,79 @@ def test_create_render_plan_script_writes_jsonl(tmp_path) -> None:
     assert len(plan) == 6
     assert set(plan["texture_condition"]) == set(VALID_TEXTURE_CONDITIONS)
     assert plan["render_id"].is_unique
+
+
+def test_sampled_render_plan_keeps_texture_triplets_matched(tmp_path) -> None:
+    plan = build_sampled_render_plan(
+        [
+            {
+                "object_id": "chair_0001",
+                "source_dataset": "shapenet",
+                "category": "chair",
+                "split": "train",
+                "raw_mesh_path": "raw/chair.obj",
+                "normalized_mesh_path": "norm/chair.glb",
+            }
+        ],
+        texture_conditions=VALID_TEXTURE_CONDITIONS,
+        pose_samples_per_object=6,
+        camera_distance=2.8,
+        azimuth_range_deg=[0.0, 360.0],
+        elevation_range_deg=[10.0, 35.0],
+        camera_fov_deg=50.0,
+        light_type="sun",
+        light_azimuth_range_deg=[0.0, 360.0],
+        light_elevation_range_deg=[20.0, 60.0],
+        light_intensity_range=[2.0, 4.5],
+        object_scale_range=[0.9, 1.1],
+        render_root=tmp_path / "renders",
+        seed=123,
+    )
+
+    assert len(plan) == 6 * len(VALID_TEXTURE_CONDITIONS)
+    assert plan["render_id"].is_unique
+    assert set(plan["render_plan_mode"]) == {"sampled"}
+    assert set(plan["camera_distance"]) == {2.8}
+    for _, group in plan.groupby("texture_control_group_id"):
+        assert set(group["texture_condition"]) == set(VALID_TEXTURE_CONDITIONS)
+        assert len(group) == len(VALID_TEXTURE_CONDITIONS)
+        for field in CONTROL_FIELDS:
+            assert group[field].nunique() == 1
+
+
+def test_sampled_render_plan_is_deterministic(tmp_path) -> None:
+    rows = [
+        {
+            "object_id": "chair_0001",
+            "source_dataset": "shapenet",
+            "category": "chair",
+            "split": "train",
+            "raw_mesh_path": "raw/chair.obj",
+            "normalized_mesh_path": "norm/chair.glb",
+        }
+    ]
+
+    plan_a = build_sampled_render_plan(
+        rows,
+        pose_samples_per_object=2,
+        camera_distance=2.8,
+        camera_fov_deg=50.0,
+        light_type="sun",
+        render_root=tmp_path / "renders",
+        seed=9,
+    )
+    plan_b = build_sampled_render_plan(
+        rows,
+        pose_samples_per_object=2,
+        camera_distance=2.8,
+        camera_fov_deg=50.0,
+        light_type="sun",
+        render_root=tmp_path / "renders",
+        seed=9,
+    )
+
+    assert plan_a["render_id"].tolist() == plan_b["render_id"].tolist()
+    assert np.allclose(
+        plan_a["camera_azimuth_deg"].to_numpy(),
+        plan_b["camera_azimuth_deg"].to_numpy(),
+    )

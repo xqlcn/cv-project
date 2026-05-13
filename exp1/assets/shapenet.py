@@ -166,20 +166,22 @@ def shapenet_allow_patterns(
 
 def _normalize_hf_token(token: Any) -> Any:
     if token is None:
-        return True
+        return None
     if isinstance(token, bool):
         return token
     text = str(token).strip()
     lower = text.lower()
-    if lower in {"", "auto", "true", "1", "yes", "y"}:
+    if lower in {"true", "1", "yes", "y"}:
         return True
+    if lower in {"", "auto", "none", "null"}:
+        return None
     if lower in {"false", "0", "no", "n"}:
         return False
     if lower == "env":
         return (
             os.environ.get("HF_TOKEN")
             or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-            or True
+            or None
         )
     return text
 
@@ -213,6 +215,78 @@ def _download_snapshot(
         kwargs["local_dir"] = str(Path(local_dir).expanduser())
 
     return Path(snapshot_download(**kwargs)).expanduser().resolve()
+
+
+def _glb_category_name(value: str) -> str:
+    clean = _clean_token(value)
+    if clean in SHAPENETCORE_SYNSET_TO_CATEGORY:
+        return SHAPENETCORE_SYNSET_TO_CATEGORY[clean]
+    return clean
+
+
+def _download_selected_glbs(
+    *,
+    repo_id: str,
+    local_dir: Union[str, Path],
+    revision: Optional[str],
+    token: Any,
+    categories: Optional[Union[str, Sequence[str]]],
+    max_objects_per_category: int,
+) -> Path:
+    """Download a bounded per-category GLB subset from the ShapeNet GLB mirror."""
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+    except ImportError as exc:
+        raise ImportError(
+            "ShapeNet Hugging Face ingestion requires huggingface_hub. "
+            "Install requirements.txt or run `pip install huggingface_hub`."
+        ) from exc
+
+    category_values = _as_optional_list(categories)
+    if not category_values:
+        raise ValueError(
+            "categories are required for bounded ShapeNet GLB downloads"
+        )
+
+    token_value = _normalize_hf_token(token)
+    local_root = Path(local_dir).expanduser().resolve()
+    local_root.mkdir(parents=True, exist_ok=True)
+    api = HfApi()
+    selected_paths: list[str] = []
+
+    for value in category_values:
+        category = _glb_category_name(value)
+        items = api.list_repo_tree(
+            repo_id,
+            repo_type="dataset",
+            path_in_repo=category,
+            recursive=False,
+            revision=revision,
+            token=token_value,
+        )
+        paths = sorted(
+            str(getattr(item, "path", ""))
+            for item in items
+            if str(getattr(item, "path", "")).lower().endswith(".glb")
+        )
+        if len(paths) < int(max_objects_per_category):
+            raise ValueError(
+                f"ShapeNet GLB category {category!r} has {len(paths)} files, "
+                f"required {int(max_objects_per_category)}"
+            )
+        selected_paths.extend(paths[: int(max_objects_per_category)])
+
+    for path in selected_paths:
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=path,
+            repo_type="dataset",
+            revision=revision,
+            token=token_value,
+            local_dir=str(local_root),
+        )
+
+    return local_root
 
 
 def _safe_extract_zip(archive_path: Path, output_dir: Path) -> None:
@@ -401,6 +475,7 @@ def discover_huggingface_shapenet_assets(
     allowed_extensions: Sequence[str] = ALLOWED_MESH_EXTENSIONS,
     default_split: str = "train",
     max_objects: Optional[int] = None,
+    max_objects_per_category: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Discover ShapeNet meshes from a Hugging Face snapshot.
 
@@ -414,14 +489,31 @@ def discover_huggingface_shapenet_assets(
 
     snapshot_root: Path
     if download:
-        snapshot_root = _download_snapshot(
-            repo_id=repo_id,
-            local_dir=local_dir,
-            revision=revision,
-            token=token,
-            allow_patterns=allow_patterns,
-            ignore_patterns=ignore_patterns,
-        )
+        if (
+            repo_id == SHAPENETCORE_GLB_HF_REPO_ID
+            and max_objects_per_category is not None
+        ):
+            if local_dir is None:
+                raise ValueError(
+                    "local_dir is required for bounded ShapeNet GLB downloads"
+                )
+            snapshot_root = _download_selected_glbs(
+                repo_id=repo_id,
+                local_dir=local_dir,
+                revision=revision,
+                token=token,
+                categories=categories,
+                max_objects_per_category=int(max_objects_per_category),
+            )
+        else:
+            snapshot_root = _download_snapshot(
+                repo_id=repo_id,
+                local_dir=local_dir,
+                revision=revision,
+                token=token,
+                allow_patterns=allow_patterns,
+                ignore_patterns=ignore_patterns,
+            )
     else:
         if local_dir is None:
             raise ValueError("local_dir is required when download=False")

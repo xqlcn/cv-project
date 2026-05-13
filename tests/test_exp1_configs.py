@@ -112,7 +112,7 @@ def test_exp1_default_sources_are_shapenetcore_and_objaverse() -> None:
     cfg = _compose_with_omegaconf("exp1_smoke")
     sources = {str(source.name): source for source in cfg.assets.sources}
 
-    assert sources["modelnet40"].enabled is False
+    assert "modelnet40" not in sources
     assert sources["synthetic_primitives"].enabled is False
     assert sources["objaverse_manifest"].enabled is True
     assert sources["objaverse"].enabled is True

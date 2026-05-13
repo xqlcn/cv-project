@@ -4,7 +4,7 @@ EXP1_CONFIG ?= configs/exp1_smoke.yaml
 EXP1_MVP_CONFIG ?= configs/exp1_mvp.yaml
 EXP1_BOUNDED_CONFIG ?= configs/exp1_bounded.yaml
 
-.PHONY: exp1-smoke exp1-smoke-post exp1-download-objaverse exp1-bounded-estimate exp1-bounded-plan exp1-mvp-plan exp1-full-plan exp1-results exp1-figures
+.PHONY: exp1-smoke exp1-smoke-post exp1-download-objaverse exp1-bounded-estimate exp1-bounded-plan exp1-mvp-plan exp1-full-plan exp1-results exp1-figures exp1-bounded-dense-patches exp1-bounded-dense-probes exp1-bounded-dense
 
 exp1-smoke:
 	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/run_exp1_pipeline.py --config $(EXP1_CONFIG) --stages smoke_prepare
@@ -32,3 +32,12 @@ exp1-results:
 
 exp1-figures:
 	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/make_exp1_figures.py --config $(EXP1_CONFIG)
+
+exp1-bounded-dense-patches:
+	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/extract_exp1_patch_features.py --config $(EXP1_BOUNDED_CONFIG)
+
+exp1-bounded-dense-probes:
+	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/train_all_dense_depth_probes.py --config $(EXP1_BOUNDED_CONFIG)
+
+exp1-bounded-dense:
+	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/run_exp1_pipeline.py --config $(EXP1_BOUNDED_CONFIG) --stages dense

@@ -1,0 +1,50 @@
+defaults:
+  - exp1_under12h
+  - _self_
+
+experiment:
+  name: exp1_under12h_dense
+  description: Bounded dense patch-depth sub-study for sampled Experiment 1.
+
+paths:
+  exp1_root: ${paths.project_root}/data/exp1_under12h_dense
+  probe_output_dir: ${paths.project_root}/outputs/exp1_under12h_dense/probes
+  results_dir: ${paths.project_root}/outputs/exp1_under12h_dense/results
+  figures_dir: ${paths.project_root}/outputs/exp1_under12h_dense/figures
+  logs_dir: ${paths.project_root}/outputs/exp1_under12h_dense/logs
+
+assets:
+  max_objects_per_category: 20
+  min_objects_per_category: 20
+
+render_plan:
+  pose_samples_per_object: 3
+  sampled:
+    camera_distance: 2.8
+    camera_distances: null
+
+models:
+  enabled: ["clip_vit_b16", "dinov2_vit_b"]
+  dense_enabled: ["clip_vit_b16", "dinov2_vit_b"]
+  layers: ["final", "layer8"]
+  dense_layers: ["final", "layer8"]
+
+features:
+  batch_size: 48
+  num_workers: 4
+  use_amp: true
+
+tasks:
+  enabled:
+    - relative_depth_regions
+
+probe:
+  dense_depth:
+    epochs: 20
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    use_layernorm: true
+    evaluation:
+      within_texture: true
+      cross_texture: false

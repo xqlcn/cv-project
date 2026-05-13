@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
+from exp1.assets.validate import assign_category_stratified_object_splits
 from exp1.data.feature_dataset import Exp1FeatureDataset
 from exp1.data.image_dataset import Exp1ImageDataset
 from exp1.data.label_join import join_labels_by_render_id
@@ -137,3 +138,29 @@ def test_relative_depth_feature_dataset_loads_target_and_valid_mask(tmp_path) ->
     assert np.allclose(item["features"], [2.0, 2.5])
     assert np.array_equal(item["target"], np.asarray([0.0, 1.0], dtype=np.float32))
     assert np.array_equal(item["valid_mask"], np.asarray([False, True]))
+
+
+def test_category_stratified_object_splits_hit_42_9_9_per_category() -> None:
+    rows = []
+    for category in ("chair", "table"):
+        for idx in range(60):
+            rows.append(
+                {
+                    "object_id": f"{category}_{idx:03d}",
+                    "source_dataset": "shapenet",
+                    "category": category,
+                }
+            )
+
+    split_rows = assign_category_stratified_object_splits(
+        rows,
+        fractions={"train": 0.7, "val": 0.15, "test": 0.15},
+        labels=("train", "val", "test"),
+        seed=5,
+    )
+    df = pd.DataFrame(split_rows)
+
+    counts = df.groupby(["category", "split"])["object_id"].nunique().unstack()
+    assert counts.loc["chair"].to_dict() == {"test": 9, "train": 42, "val": 9}
+    assert counts.loc["table"].to_dict() == {"test": 9, "train": 42, "val": 9}
+    assert df.groupby("object_id")["split"].nunique().max() == 1

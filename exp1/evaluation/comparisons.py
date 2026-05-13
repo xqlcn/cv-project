@@ -6,8 +6,31 @@ from typing import Optional
 
 import pandas as pd
 
-LOWER_IS_BETTER_TOKENS = ("error", "loss", "mae", "mse", "rmse", "median")
-HIGHER_IS_BETTER_TOKENS = ("accuracy", "acc", "auc", "auroc", "f1", "r2")
+LOWER_IS_BETTER_TOKENS = (
+    "error",
+    "loss",
+    "mae",
+    "mse",
+    "rmse",
+    "abs_rel",
+    "ssi_l1",
+)
+HIGHER_IS_BETTER_TOKENS = (
+    "accuracy",
+    "acc",
+    "auc",
+    "auroc",
+    "f1",
+    "r2",
+    "pearson",
+    "spearman",
+    "kendall",
+    "correlation",
+    "delta_",
+    "d1",
+    "d2",
+    "d3",
+)
 
 
 def metric_direction(metric: str) -> Optional[str]:
@@ -24,11 +47,18 @@ def compute_texture_dependence_drops(
     results: pd.DataFrame,
     *,
     baseline_texture: str = "photorealistic",
+    include_cross_texture: bool = False,
 ) -> pd.DataFrame:
     """Compute performance degradation relative to a texture baseline.
 
     Positive ``texture_drop`` means the comparison texture is worse than the
     baseline according to the metric direction.
+
+    By default this computes texture dependence only for within-texture probe
+    runs, e.g. a probe trained/evaluated on ``flat`` compared with a probe
+    trained/evaluated on ``photorealistic``. Cross-texture transfer runs such as
+    ``train_flat__test_random_noise`` answer a different question and are
+    excluded unless ``include_cross_texture`` is true.
     """
     required = {
         "task",
@@ -43,9 +73,19 @@ def compute_texture_dependence_drops(
     if missing:
         raise ValueError("Missing required results columns: " + ", ".join(missing))
 
+    df = results.copy()
+    if not include_cross_texture and {
+        "train_texture_condition",
+        "eval_texture_condition",
+    }.issubset(df.columns):
+        df = df[
+            df["train_texture_condition"].astype(str).eq("all")
+            & df["eval_texture_condition"].astype(str).eq("all")
+        ].copy()
+
     keys = ["task", "model", "layer", "split", "metric"]
     rows = []
-    for key_values, group in results.groupby(keys, dropna=False):
+    for key_values, group in df.groupby(keys, dropna=False):
         direction = metric_direction(str(key_values[-1]))
         if direction is None:
             continue

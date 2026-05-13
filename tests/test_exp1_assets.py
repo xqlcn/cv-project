@@ -11,7 +11,6 @@ import trimesh
 
 from exp1.assets.discover import (
     discover_assets_from_directory,
-    discover_modelnet40_assets,
 )
 from exp1.assets.normalize import normalize_asset_manifest
 from exp1.assets.objaverse import bytes_from_gb, select_objaverse_lvis_uids
@@ -56,19 +55,6 @@ def test_discover_assets_from_directory_finds_supported_meshes(tmp_path) -> None
     assert rows[0]["object_id"] == "chair_0001"
     assert rows[0]["source_dataset"] == "unit"
     assert rows[0]["category"] == "chair"
-    assert rows[0]["split"] == "train"
-    assert rows[0]["raw_mesh_path"] == str(mesh_path.resolve())
-
-
-def test_discover_modelnet40_assets_uses_existing_repo_scanner(tmp_path) -> None:
-    mesh_path = tmp_path / "train" / "chair" / "chair_0001.off"
-    _write_box(mesh_path)
-
-    rows = discover_modelnet40_assets(tmp_path)
-
-    assert len(rows) == 1
-    assert rows[0]["object_id"] == "chair_chair_0001"
-    assert rows[0]["source_dataset"] == "modelnet40"
     assert rows[0]["split"] == "train"
     assert rows[0]["raw_mesh_path"] == str(mesh_path.resolve())
 
@@ -257,55 +243,6 @@ def test_assign_object_disjoint_splits_uses_configured_fractions() -> None:
     assert counts == {"train": 6, "val": 2, "test": 2}
     assert [row["split"] for row in first] == [row["split"] for row in second]
     assert {row["split_original"] for row in first} == {"train"}
-
-
-def test_preprocess_assets_script_supports_modelnet40(tmp_path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    mesh_path = tmp_path / "modelnet40" / "train" / "chair" / "chair_0001.off"
-    _write_box(mesh_path)
-    asset_manifest = tmp_path / "assets.jsonl"
-    normalized_manifest = tmp_path / "assets_normalized.jsonl"
-    split_manifest = tmp_path / "splits.jsonl"
-    normalized_root = tmp_path / "normalized"
-
-    subprocess.run(
-        [
-            sys.executable,
-            "scripts/preprocess_assets.py",
-            "--config",
-            "configs/exp1_smoke.yaml",
-            "--modelnet-root",
-            str(tmp_path / "modelnet40"),
-            "--output-manifest",
-            str(asset_manifest),
-            "--normalized-manifest",
-            str(normalized_manifest),
-            "--split-manifest",
-            str(split_manifest),
-            "--normalized-root",
-            str(normalized_root),
-        ],
-        cwd=repo_root,
-        check=True,
-    )
-
-    raw_rows = read_jsonl(asset_manifest)
-    normalized_rows = read_jsonl(normalized_manifest)
-    split_rows = read_jsonl(split_manifest)
-
-    assert len(raw_rows) == 1
-    assert len(normalized_rows) == 1
-    assert normalized_rows[0]["source_dataset"] == "modelnet40"
-    assert normalized_rows[0]["asset_status"] == "normalized"
-    assert Path(normalized_rows[0]["normalized_mesh_path"]).is_file()
-    assert split_rows == [
-        {
-            "object_id": "chair_chair_0001",
-            "source_dataset": "modelnet40",
-            "category": "chair",
-            "split": "train",
-        }
-    ]
 
 
 def test_preprocess_assets_script_supports_huggingface_shapenet_local_snapshot(

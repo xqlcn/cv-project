@@ -66,6 +66,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not require qc_pass when the manifest has QC columns.",
     )
+    parser.add_argument("--amp", action="store_true", help="Enable CUDA fp16 autocast.")
+    parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Disable autocast even if features.use_amp is true.",
+    )
     return parser.parse_args()
 
 
@@ -122,9 +128,13 @@ def main() -> None:
     num_workers = int(
         args.num_workers if args.num_workers is not None else cfg.features.num_workers
     )
+    use_amp = bool(cfg.features.get("use_amp", False) or args.amp)
+    if args.no_amp:
+        use_amp = False
     print(
         f"Extracting {len(rows)} renders on {device} for models={model_names}, "
-        f"layers={layer_names}, batch_size={batch_size}, num_workers={num_workers}"
+        f"layers={layer_names}, batch_size={batch_size}, num_workers={num_workers}, "
+        f"use_amp={use_amp}"
     )
 
     written = []
@@ -144,6 +154,7 @@ def main() -> None:
             project_root=project_root,
             normalize=bool(cfg.features.normalize),
             num_workers=num_workers,
+            use_amp=use_amp,
         )
         written.extend(paths)
         for path in paths:

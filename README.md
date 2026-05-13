@@ -9,7 +9,7 @@ An optional **Blender** path (`blender/render_dataset.py`) remains for high-qual
 
 ## Layout
 
-- `src/datasets/` — ModelNet40 index, synthetic cache, rendered `Dataset` wrappers
+- `src/datasets/` — synthetic cache and rendered `Dataset` wrappers
 - `src/rendering/` — multi-view pyrender backend (RGB / depth / normals)
 - `blender/` — headless Blender chirality pipeline + manifest
 - `configs/` — YAML / Hydra
@@ -41,32 +41,7 @@ pip install trimesh networkx scipy pyglet "Pillow>=10" imageio freetype-py six
 
 **Headless rendering:** on Linux servers you may need `export PYOPENGL_PLATFORM=osmesa` (and OSMesa installed) or EGL; on macOS the default often works for offscreen pyrender.
 
-## 1) Legacy ModelNet40 download
-
-ModelNet40 is kept only for legacy validation utilities. It is not the default
-Experiment 1 source because `.off` meshes do not provide photorealistic texture
-controls.
-
-Automatic (may fail if the server blocks bots; then use manual steps printed by the script):
-
-```bash
-python scripts/download_modelnet40.py
-```
-
-Manual fallback:
-
-1. Open [https://modelnet.cs.princeton.edu/](https://modelnet.cs.princeton.edu/) and download **ModelNet40.zip**.
-2. Unzip so you have `data/modelnet40/train/<category>/*.off` and `data/modelnet40/test/<category>/*.off`.
-
-Optional Blender manifest from the same tree:
-
-```bash
-python scripts/prepare_modelnet_manifest.py \
-  --modelnet-root data/modelnet40 \
-  --output data/metadata/modelnet40_manifest.json
-```
-
-## 2) Synthetic primitives (default experiment)
+## 1) Synthetic primitives (default experiment)
 
 ```bash
 python scripts/setup_synthetic_primitives.py
@@ -74,7 +49,7 @@ python scripts/setup_synthetic_primitives.py
 
 Creates `data/synthetic_primitives/train/*.obj`, `val/*.obj`, and `catalog.json`.
 
-## 2b) ShapeNetCore from Hugging Face
+## 2) ShapeNetCore from Hugging Face
 
 After your Hugging Face account has access to the gated
 `ShapeNet/ShapeNetCore` repository, log in locally and preprocess a small
@@ -111,7 +86,7 @@ as `data/shapenet_hf/shapenetcore-glb`.
 Use `--shapenet-no-download` with `--shapenet-hf-local-dir` to scan an existing
 snapshot without contacting Hugging Face.
 
-## 2c) Objaverse Bounded Download
+## 3) Objaverse Bounded Download
 
 Objaverse access is optional and bounded by config defaults in
 `configs/exp1/paths.yaml` (`datasets.objaverse.max_objects` and
@@ -134,7 +109,7 @@ running Blender:
 make exp1-mvp-plan
 ```
 
-## 2d) Bounded Depth/Normal Run
+## 4) Bounded Depth/Normal Run
 
 Use `configs/exp1_bounded.yaml` as the next non-toy scale-up config. It keeps
 the core geometry probes only:
@@ -165,7 +140,7 @@ HF_HOME=data/hf_cache PYTHONPATH=. python scripts/run_exp1_pipeline.py \
   --stages post_render ml
 ```
 
-## 2e) Experiment 1 smoke pipeline
+## 5) Experiment 1 smoke pipeline
 
 The safe smoke command prepares a tiny synthetic asset catalog, writes an
 Experiment 1 render plan, exports JSONL render chunks, and creates a Blender
@@ -208,7 +183,7 @@ PYTHONPATH=. python scripts/aggregate_exp1_results.py --config configs/exp1_smok
 PYTHONPATH=. python scripts/make_exp1_figures.py --config configs/exp1_smoke.yaml
 ```
 
-## 3) Rendered sample schema (ModelNet + synthetic + future corpora)
+## 6) Rendered sample schema (synthetic + ShapeNet/Objaverse corpora)
 
 Each **rendered** training sample is a flat dict (one **view** per row when `flatten_views=True`):
 
@@ -219,7 +194,7 @@ Each **rendered** training sample is a flat dict (one **view** per row when `fla
     "split": str,
     "view_id": int,
     "object_id": str,
-    "dataset": str,  # "modelnet40" | "synthetic_primitives" | ...
+    "dataset": str,  # "synthetic_primitives" | "shapenet" | "objaverse" | ...
     "rgb": np.uint8[H, W, 3],
     "depth": np.float32[H, W],   # linear depth in meters (inf = background)
     "normal": np.float32[H, W, 3],  # camera-space normals in [-1, 1]
@@ -229,8 +204,7 @@ Each **rendered** training sample is a flat dict (one **view** per row when `fla
 **PyTorch datasets**
 
 - `RenderedSyntheticPrimitiveDataset` — default controlled renders.
-- `RenderedModelNetDataset` — ModelNet40 validation / training renders.
-- `RenderedMeshDataset` — generic wrapper over any list of records with the same keys (e.g. future ShapeNet rows with `mesh_path` + `category` + `split`).
+- `RenderedMeshDataset` — generic wrapper over any list of records with the same keys (e.g. ShapeNet/Objaverse rows with `mesh_path` + `category` + `split`).
 
 Example:
 
@@ -247,20 +221,13 @@ sample = ds[0]  # keys: mesh_path, category, split, view_id, rgb, depth, normal,
 
 **PyTorch3D:** not required. The active backend is **trimesh + pyrender** (`src/rendering/mesh_renderer.py`). Optional PyTorch3D hook lives in `src/rendering/pytorch3d_backend.py` (stub for you to implement if you install `pytorch3d`).
 
-## Blender (optional) chirality pipeline
+## Feature extraction & probes
 
-1. Install Blender 3.6+.
-2. Install **PyYAML** into Blender’s Python (see previous README sections).
-3. Point `configs/render_config.yaml` → `paths.mesh_manifest` at `data/metadata/modelnet40_manifest.json`.
-4. Run `./scripts/render_chirality_dataset.sh`.
-
-## Feature extraction & probes (unchanged)
+Use the Experiment 1 pipeline scripts for current runs:
 
 ```bash
-./scripts/extract_clip_features.sh
-./scripts/extract_dino_features.sh
-./scripts/train_clip_probe.sh
-./scripts/train_dino_probe.sh
+PYTHONPATH=. python scripts/extract_exp1_features.py --config configs/exp1_smoke.yaml
+PYTHONPATH=. python scripts/train_all_exp1_probes.py --config configs/exp1_smoke.yaml
 ```
 
 ## Hydra
@@ -271,5 +238,5 @@ python -m src.training.train_probe --config-name=clip_probe probe.epochs=5
 
 ## Licenses
 
-- **ModelNet** (Princeton) — follow their terms for redistribution and citation.
+- **ShapeNet** / **Objaverse** — follow each dataset's terms for redistribution and citation.
 - **CLIP**, **DINOv2**, **OpenCLIP** — respect each model license in publications.

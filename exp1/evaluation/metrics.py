@@ -100,6 +100,8 @@ def load_probe_metrics_file(
                     "metric": str(metric),
                     "value": numeric,
                     "metrics_path": str(path),
+                    "feature_mode": str(metadata.get("feature_mode", "")),
+                    "target_mode": str(metadata.get("target_mode", "")),
                 }
             )
     return records
@@ -127,6 +129,8 @@ def aggregate_probe_metrics(
         "metric",
         "value",
         "metrics_path",
+        "feature_mode",
+        "target_mode",
     ]
     return pd.DataFrame.from_records(records, columns=columns)
 
@@ -136,6 +140,21 @@ BOOTSTRAP_PREDICTION_COLUMNS = {
     "row_valid_pair_accuracy": "valid_pair_accuracy",
     "row_mae": "mae_mean",
     "viewpoint_angular_error_deg": "viewpoint_angular_error_deg_mean",
+    "ssi_l1": "ssi_l1_mean",
+    "scale_aware_abs_rel": "scale_aware_abs_rel_mean",
+    "scale_aware_rmse": "scale_aware_rmse_mean",
+    "scale_aware_rmse_log": "scale_aware_rmse_log_mean",
+    "scale_aware_d1": "scale_aware_d1_mean",
+    "scale_aware_d2": "scale_aware_d2_mean",
+    "scale_aware_d3": "scale_aware_d3_mean",
+    "scale_invariant_abs_rel": "scale_invariant_abs_rel_mean",
+    "scale_invariant_rmse": "scale_invariant_rmse_mean",
+    "scale_invariant_rmse_log": "scale_invariant_rmse_log_mean",
+    "scale_invariant_d1": "scale_invariant_d1_mean",
+    "scale_invariant_d2": "scale_invariant_d2_mean",
+    "scale_invariant_d3": "scale_invariant_d3_mean",
+    "pearson_r": "pearson_r_mean",
+    "valid_patch_count": "valid_patch_count_mean",
 }
 
 
@@ -204,6 +223,8 @@ def aggregate_prediction_bootstrap_cis(
                         "mean": ci["mean"],
                         "ci_low": ci["ci_low"],
                         "ci_high": ci["ci_high"],
+                        "feature_mode": str(metadata.get("feature_mode", "")),
+                        "target_mode": str(metadata.get("target_mode", "")),
                         "unit_column": unit_column if units is not None else "",
                         "n_resamples": int(n_resamples),
                         "predictions_path": str(path),
@@ -221,6 +242,8 @@ def aggregate_prediction_bootstrap_cis(
         "mean",
         "ci_low",
         "ci_high",
+        "feature_mode",
+        "target_mode",
         "unit_column",
         "n_resamples",
         "predictions_path",

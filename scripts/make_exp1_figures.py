@@ -12,7 +12,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from exp1.analysis.plots import plot_layerwise_metrics, plot_texture_drops
-from exp1.analysis.qualitative import make_qualitative_probe_tables
+from exp1.analysis.qualitative import (
+    make_dense_depth_qualitative_table,
+    make_qualitative_probe_tables,
+)
 from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
 from exp1.evaluation.comparisons import compute_texture_dependence_drops
 from exp1.evaluation.metrics import load_results_table
@@ -83,19 +86,59 @@ def main() -> None:
         if label_path is None:
             continue
         task_label_paths[task_name] = _resolve_required(project_root, str(label_path))
-    paths.extend(
-        make_qualitative_probe_tables(
-            tasks=[str(task) for task in cfg.tasks.enabled],
-            task_label_paths=task_label_paths,
-            manifest_path=manifest_path,
-            probe_root=probe_root,
-            output_dir=figures_dir,
-            project_root=project_root,
-            layer_name="final",
-            textures=[str(texture) for texture in cfg.textures.conditions],
-            preferred_split="test",
+    model_display_names = {
+        "clip_vit_b16": "CLIP B/16",
+        "clip_vit_l14": "CLIP L/14",
+        "dinov2_vit_b": "DINOv2 B",
+        "dinov2_vit_l": "DINOv2 L",
+    }
+    qualitative_model_display = {
+        str(model): model_display_names.get(str(model), str(model))
+        for model in cfg.models.enabled
+    }
+    if any(probe_root.glob("**/predictions.csv")):
+        paths.extend(
+            make_qualitative_probe_tables(
+                tasks=[str(task) for task in cfg.tasks.enabled],
+                task_label_paths=task_label_paths,
+                manifest_path=manifest_path,
+                probe_root=probe_root,
+                output_dir=figures_dir,
+                project_root=project_root,
+                model_display_order=qualitative_model_display,
+                layer_name="final",
+                textures=[str(texture) for texture in cfg.textures.conditions],
+                preferred_split="test",
+            )
         )
+    dense_layers = cfg.models.get("dense_layers")
+    qualitative_layers = (
+        [str(layer) for layer in dense_layers]
+        if dense_layers
+        else ["final"]
     )
+    for layer_name in qualitative_layers:
+        dense_enabled = cfg.models.get("dense_enabled") or cfg.models.enabled
+        dense_model_display = {
+            str(model): model_display_names.get(str(model), str(model))
+            for model in dense_enabled
+        }
+        try:
+            dense_path = make_dense_depth_qualitative_table(
+                manifest_path=manifest_path,
+                probe_root=probe_root,
+                output_path=figures_dir
+                / f"qualitative_dense_depth_patches_{layer_name}.png",
+                project_root=project_root,
+                model_display_order=dense_model_display,
+                layer_name=layer_name,
+                textures=[str(texture) for texture in cfg.textures.conditions],
+                preferred_split="test",
+            )
+        except (FileNotFoundError, ValueError, KeyError):
+            dense_path = None
+        if dense_path is not None:
+            paths.append(dense_path)
     print(f"Wrote {len(paths)} figure(s) to {figures_dir}")
     for path in paths:
         print(f"Wrote figure: {path}")

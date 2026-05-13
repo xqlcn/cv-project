@@ -14,7 +14,7 @@ import mathutils
 
 def _parse_off_file(filepath: str) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, ...]]]:
     """
-    Parse ASCII OFF (ModelNet). Handles header 'OFF' on its own line or merged with counts.
+    Parse ASCII OFF mesh. Handles header 'OFF' on its own line or merged with counts.
 
     Returns (vertices, faces) where faces are tuples of vertex indices (triangles or quads).
     """
@@ -104,7 +104,7 @@ def clear_meshes(objects: Optional[Iterable[bpy.types.Object]] = None) -> None:
 
 def import_mesh(filepath: str) -> bpy.types.Object:
     """
-    Import a mesh file. Supports .off (ModelNet), .obj, .glb/.gltf, .fbx.
+    Import a mesh file. Supports .off, .obj, .glb/.gltf, .fbx.
 
     Returns the primary imported mesh object (first mesh if multiple).
     """

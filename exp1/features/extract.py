@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
@@ -15,12 +18,39 @@ from PIL import Image
 from tqdm import tqdm
 
 from exp1.data.splits import filter_manifest
-from exp1.features.storage import save_feature_cache
+from exp1.features.storage import (
+    patch_feature_cache_path,
+    save_feature_cache,
+    save_patch_feature_cache,
+)
 from exp1.metadata.manifest import load_manifest
 from src.models.clip_extractor import CLIPExtractorConfig, FrozenCLIPExtractor
 from src.models.dino_extractor import DINOExtractorConfig, FrozenDINOv2Extractor
 
 BatchFn = Callable[[list[Image.Image]], Mapping[str, Any]]
+CLS_FEATURE_SUFFIX = "__cls_features"
+
+
+def manifest_rows_fingerprint(rows: Iterable[Mapping[str, Any]]) -> str:
+    """Hash render-row identity fields used to guard feature-cache freshness."""
+    payload = []
+    for row in rows:
+        payload.append(
+            {
+                "render_id": str(row.get("render_id", "")),
+                "rgb_path": str(row.get("rgb_path", "")),
+                "texture_condition": str(row.get("texture_condition", "")),
+                "split": str(row.get("split", "")),
+                "object_id": str(row.get("object_id", "")),
+            }
+        )
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()
 
 
 def parse_layer_name(layer_name: str) -> Optional[int]:
@@ -180,6 +210,7 @@ def build_backbone_extractor(
     model_cfg: Mapping[str, Any],
     layer_names: Sequence[str],
     device: torch.device,
+    return_patch_layers: bool = False,
 ):
     """Instantiate a frozen CLIP or DINOv2 extractor from config."""
     family = str(model_cfg["family"])
@@ -195,6 +226,7 @@ def build_backbone_extractor(
                     model_cfg.get("open_clip_pretrained", "laion2b_s34b_b88k")
                 ),
                 layers=layers or None,
+                return_patch_layers=bool(return_patch_layers),
             ),
             device=device,
         )
@@ -207,19 +239,34 @@ def build_backbone_extractor(
                 revision=model_cfg.get("revision"),
                 image_size=int(model_cfg.get("image_size", 518)),
                 layers=layers or None,
+                return_patch_layers=bool(return_patch_layers),
             ),
             device=device,
         )
     raise ValueError(f"Unknown model family for {model_name}: {family}")
 
 
-def batch_extract_fn_for_extractor(extractor: Any, *, num_workers: int = 0) -> BatchFn:
+def batch_extract_fn_for_extractor(
+    extractor: Any,
+    *,
+    num_workers: int = 0,
+    use_amp: bool = False,
+) -> BatchFn:
     """Return a deterministic PIL batch callback for an existing extractor."""
 
     def _extract(images: list[Image.Image]) -> Mapping[str, Any]:
+        device = getattr(extractor, "device", torch.device("cpu"))
+        device_type = str(getattr(device, "type", device))
+        amp_enabled = bool(use_amp) and device_type == "cuda"
+        amp_context = (
+            torch.autocast(device_type="cuda", dtype=torch.float16)
+            if amp_enabled
+            else nullcontext()
+        )
         if hasattr(extractor, "_pixel_values_from_pil"):
             pixel_values = extractor._pixel_values_from_pil(images)
-            return extractor.forward_image_tensor(pixel_values)
+            with torch.inference_mode(), amp_context:
+                return extractor.forward_image_tensor(pixel_values)
         if hasattr(extractor, "_prepare_batch"):
             if int(num_workers) > 1 and hasattr(extractor, "transform"):
                 with ThreadPoolExecutor(max_workers=int(num_workers)) as executor:
@@ -230,9 +277,11 @@ def batch_extract_fn_for_extractor(extractor: Any, *, num_workers: int = 0) -> B
                         )
                     )
                 batch = torch.stack(tensors).to(extractor.device, non_blocking=True)
-                return extractor.forward_tensor(batch)
+                with torch.inference_mode(), amp_context:
+                    return extractor.forward_tensor(batch)
             batch = extractor._prepare_batch(images)
-            return extractor.forward_tensor(batch)
+            with torch.inference_mode(), amp_context:
+                return extractor.forward_tensor(batch)
         raise TypeError(f"Unsupported extractor type: {type(extractor).__name__}")
 
     return _extract
@@ -242,6 +291,236 @@ def _mapping_from_omegaconf(value: Any) -> Mapping[str, Any]:
     if isinstance(value, DictConfig):
         return OmegaConf.to_container(value, resolve=True)  # type: ignore[return-value]
     return value
+
+
+def _batch_patch_features(
+    batch_features: Mapping[str, Any],
+    *,
+    layer_name: str,
+) -> np.ndarray:
+    """Return per-layer patch tokens as a 3D array (B, num_patches, D)."""
+    layer_number = parse_layer_name(layer_name)
+    if layer_number is None:
+        patch = batch_features["patch_tokens_final"]
+    else:
+        patch_map = batch_features.get("layer_patch", {})
+        if layer_number not in patch_map:
+            raise KeyError(
+                f"Extractor output is missing patch tokens for layer {layer_number}"
+            )
+        patch = patch_map[layer_number]
+    return _tensor_to_numpy(patch)
+
+
+def _patch_cls_key(layer_name: str) -> str:
+    return f"{str(layer_name)}{CLS_FEATURE_SUFFIX}"
+
+
+def _batch_cls_features(
+    batch_features: Mapping[str, Any],
+    *,
+    layer_name: str,
+) -> np.ndarray:
+    """Return the CLS/global token corresponding to a patch-token layer."""
+    layer_number = parse_layer_name(layer_name)
+    if layer_number is None:
+        return _tensor_to_numpy(batch_features["cls_final"])
+    layer_map = batch_features.get("layer_cls", {})
+    if layer_number not in layer_map:
+        raise KeyError(
+            f"Extractor output is missing CLS features for layer {layer_number}"
+        )
+    return _tensor_to_numpy(layer_map[layer_number])
+
+
+def _patch_grid_side(num_patches: int) -> int:
+    side = int(round(np.sqrt(num_patches)))
+    if side * side != num_patches:
+        raise ValueError(
+            f"Patch grid is not square: {num_patches} patches do not factor into PxP"
+        )
+    return side
+
+
+def extract_patch_feature_arrays(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    batch_extract_fn: BatchFn,
+    layer_names: Sequence[str],
+    batch_size: int,
+    project_root: Optional[Union[str, Path]] = None,
+    image_column: str = "rgb_path",
+    show_progress: bool = True,
+    num_workers: int = 0,
+    dtype: str = "float16",
+    include_cls: bool = True,
+) -> dict[str, np.ndarray]:
+    """Extract per-layer patch grids (N, P, P, D) for the given rows.
+
+    When ``include_cls`` is true, the returned dictionary also contains
+    ``f"{layer}__cls_features"`` arrays with shape ``(N, D_cls)``. The patch
+    arrays remain available under the original layer names for backward
+    compatibility with older callers.
+    """
+    rows_list = [dict(row) for row in rows]
+    layer_names = [str(layer) for layer in layer_names]
+    features_by_layer: dict[str, list[np.ndarray]] = {
+        layer: [] for layer in layer_names
+    }
+    cls_by_layer: dict[str, list[np.ndarray]] = {layer: [] for layer in layer_names}
+    iterator = range(0, len(rows_list), int(batch_size))
+    if show_progress:
+        iterator = tqdm(iterator, desc="extract exp1 patch features")
+
+    def _load_image(row: Mapping[str, Any]) -> Image.Image:
+        with Image.open(_resolve_path(project_root, row[image_column])) as image:
+            return image.convert("RGB")
+
+    worker_count = max(0, int(num_workers))
+    grid_side: dict[str, int] = {}
+    feat_dim: dict[str, int] = {}
+    target_dtype = np.dtype(dtype)
+    for start in iterator:
+        batch_rows = rows_list[start : start + int(batch_size)]
+        if worker_count > 1 and len(batch_rows) > 1:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                images = list(executor.map(_load_image, batch_rows))
+        else:
+            images = [_load_image(row) for row in batch_rows]
+        batch_features = batch_extract_fn(images)
+        for layer_name in layer_names:
+            tokens = _batch_patch_features(batch_features, layer_name=layer_name)
+            if tokens.shape[0] != len(batch_rows):
+                raise ValueError(
+                    f"Layer {layer_name} produced {tokens.shape[0]} rows "
+                    f"for batch size {len(batch_rows)}"
+                )
+            side = _patch_grid_side(int(tokens.shape[1]))
+            grid_side.setdefault(layer_name, side)
+            feat_dim.setdefault(layer_name, int(tokens.shape[2]))
+            grid = tokens.reshape(
+                tokens.shape[0], side, side, tokens.shape[2]
+            ).astype(target_dtype, copy=False)
+            features_by_layer[layer_name].append(grid)
+            if include_cls:
+                cls = _batch_cls_features(batch_features, layer_name=layer_name)
+                if cls.shape[0] != len(batch_rows):
+                    raise ValueError(
+                        f"Layer {layer_name} produced {cls.shape[0]} CLS rows "
+                        f"for batch size {len(batch_rows)}"
+                    )
+                cls_by_layer[layer_name].append(cls.astype(target_dtype, copy=False))
+
+    out: dict[str, np.ndarray] = {}
+    for layer_name, chunks in features_by_layer.items():
+        if not chunks:
+            out[layer_name] = np.zeros((0, 0, 0, 0), dtype=target_dtype)
+            if include_cls:
+                out[_patch_cls_key(layer_name)] = np.zeros((0, 0), dtype=target_dtype)
+            continue
+        arr = np.concatenate(chunks, axis=0)
+        out[layer_name] = arr
+        if include_cls:
+            out[_patch_cls_key(layer_name)] = np.concatenate(
+                cls_by_layer[layer_name],
+                axis=0,
+            )
+    return out
+
+
+def extract_and_save_patch_caches(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    model_name: str,
+    model_cfg: Mapping[str, Any],
+    layer_names: Sequence[str],
+    feature_dir: Union[str, Path],
+    batch_size: int,
+    device: torch.device,
+    project_root: Optional[Union[str, Path]] = None,
+    num_workers: int = 0,
+    dtype: str = "float16",
+    use_amp: bool = False,
+    include_cls: bool = True,
+) -> list[Path]:
+    """Extract one model's patch tokens for requested layers and save NPZ caches.
+
+    For each requested layer we run the backbone once and write the cache before
+    moving on to the next layer. That keeps peak memory bounded to one layer's
+    cache (~5-10 GB at float16 for the bounded experiment) instead of holding
+    every layer simultaneously.
+    """
+    rows_list = [dict(row) for row in rows]
+    render_ids = [str(row["render_id"]) for row in rows_list]
+    paths: list[Path] = []
+    for layer_name in layer_names:
+        extractor = build_backbone_extractor(
+            model_name=model_name,
+            model_cfg=_mapping_from_omegaconf(model_cfg),
+            layer_names=[layer_name],
+            device=device,
+            return_patch_layers=True,
+        )
+        arrays = extract_patch_feature_arrays(
+            rows_list,
+            batch_extract_fn=batch_extract_fn_for_extractor(
+                extractor,
+                num_workers=num_workers,
+                use_amp=use_amp,
+            ),
+            layer_names=[layer_name],
+            batch_size=batch_size,
+            project_root=project_root,
+            num_workers=num_workers,
+            dtype=dtype,
+            include_cls=include_cls,
+        )
+        features = arrays[layer_name]
+        cls_features = arrays.get(_patch_cls_key(layer_name)) if include_cls else None
+        path = patch_feature_cache_path(
+            feature_dir, model_name=model_name, layer_name=layer_name
+        )
+        input_size = model_cfg.get("image_size")
+        patch_size = None
+        if input_size is not None and features.size:
+            patch_size = int(input_size) // int(features.shape[1])
+        paths.append(
+            save_patch_feature_cache(
+                path,
+                render_ids=render_ids,
+                patch_features=features,
+                cls_features=cls_features,
+                metadata={
+                    "model_name": model_name,
+                    "layer_name": layer_name,
+                    "feature_type": "patch_grid",
+                    "manifest_hash": manifest_rows_fingerprint(rows_list),
+                    "num_render_rows": len(rows_list),
+                    "use_amp": bool(use_amp),
+                    "dtype": dtype,
+                    "feature_mode": "patch_cls" if include_cls else "patch",
+                    "model_input_size": int(input_size) if input_size else None,
+                    "patch_size": patch_size,
+                    "preprocess_signature": (
+                        f"resize_shortest_edge_center_crop_{int(input_size)}"
+                        if input_size
+                        else "unknown"
+                    ),
+                    "patch_grid_side": int(features.shape[1])
+                    if features.size
+                    else 0,
+                    "feature_dim": int(features.shape[3]) if features.size else 0,
+                    "cls_feature_dim": int(cls_features.shape[1])
+                    if cls_features is not None and cls_features.size
+                    else 0,
+                },
+                dtype=dtype,
+            )
+        )
+        del features, arrays, extractor
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    return paths
 
 
 def extract_and_save_feature_caches(
@@ -257,6 +536,7 @@ def extract_and_save_feature_caches(
     project_root: Optional[Union[str, Path]] = None,
     normalize: bool = True,
     num_workers: int = 0,
+    use_amp: bool = False,
 ) -> list[Path]:
     """Extract one model's requested layers and save canonical NPZ caches."""
     rows_list = [dict(row) for row in rows]
@@ -271,6 +551,7 @@ def extract_and_save_feature_caches(
         batch_extract_fn=batch_extract_fn_for_extractor(
             extractor,
             num_workers=num_workers,
+            use_amp=use_amp,
         ),
         layer_names=layer_names,
         batch_size=batch_size,
@@ -293,6 +574,9 @@ def extract_and_save_feature_caches(
                     "layer_name": layer_name,
                     "token": token,
                     "feature_type": "global",
+                    "manifest_hash": manifest_rows_fingerprint(rows_list),
+                    "num_render_rows": len(rows_list),
+                    "use_amp": bool(use_amp),
                     "normalized": bool(normalize),
                 },
             )

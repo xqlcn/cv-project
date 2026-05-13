@@ -20,7 +20,7 @@ matplotlib>=3.8.0
 pandas>=2.0.0
 pyarrow>=14.0.0
 
-# Mesh loading + offscreen rendering (ModelNet40 / synthetic pipeline)
+# Mesh loading + offscreen rendering (ShapeNet / Objaverse / synthetic pipeline)
 trimesh>=4.0.0
 # PyPI pyrender 0.1.45 pins PyOpenGL==3.1.0 (invalid on Python 3.7+). Upstream master uses PyOpenGL~=3.1.0.
 pyrender @ git+https://github.com/mmatl/pyrender.git

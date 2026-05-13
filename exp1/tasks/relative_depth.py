@@ -52,6 +52,25 @@ def _region_slices(
     return slices
 
 
+def _foreground_bbox(
+    mask: np.ndarray,
+    *,
+    padding_fraction: float = 0.0,
+) -> Optional[tuple[slice, slice]]:
+    ys, xs = np.where(mask.astype(bool))
+    if len(ys) == 0 or len(xs) == 0:
+        return None
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    pad_y = int(np.ceil((y1 - y0) * float(padding_fraction)))
+    pad_x = int(np.ceil((x1 - x0) * float(padding_fraction)))
+    y0 = max(0, y0 - pad_y)
+    y1 = min(mask.shape[0], y1 + pad_y)
+    x0 = max(0, x0 - pad_x)
+    x1 = min(mask.shape[1], x1 + pad_x)
+    return slice(y0, y1), slice(x0, x1)
+
+
 def _depth_stat(values: np.ndarray, statistic: str) -> float:
     if statistic == "mean":
         return float(np.mean(values))
@@ -67,12 +86,20 @@ def region_depths(
     grid_size: Sequence[int] = (3, 3),
     statistic: str = "median",
     min_valid_fraction_per_region: float = 0.25,
+    use_foreground_bbox: bool = False,
+    bbox_padding_fraction: float = 0.0,
 ) -> tuple[List[float], List[bool], List[int]]:
     """Return one depth statistic and valid flag per coarse image region."""
     if depth.ndim != 2:
         raise ValueError(f"Expected depth [H,W], got shape {depth.shape}")
     if mask.shape != depth.shape:
         raise ValueError("Depth and mask shapes differ")
+    if use_foreground_bbox:
+        bbox = _foreground_bbox(mask, padding_fraction=bbox_padding_fraction)
+        if bbox is not None:
+            ys, xs = bbox
+            depth = depth[ys, xs]
+            mask = mask[ys, xs]
 
     depths: List[float] = []
     valid: List[bool] = []
@@ -102,6 +129,8 @@ def relative_depth_label_row(
     statistic: str = "median",
     min_valid_fraction_per_region: float = 0.25,
     min_depth_margin: float = 0.02,
+    use_foreground_bbox: bool = False,
+    bbox_padding_fraction: float = 0.0,
 ) -> Dict[str, Any]:
     """Create wide relative-depth pair labels for one render."""
     depths, region_valid, counts = region_depths(
@@ -110,12 +139,18 @@ def relative_depth_label_row(
         grid_size=grid_size,
         statistic=statistic,
         min_valid_fraction_per_region=min_valid_fraction_per_region,
+        use_foreground_bbox=use_foreground_bbox,
+        bbox_padding_fraction=bbox_padding_fraction,
     )
 
     row: Dict[str, Any] = {
         "relative_depth_grid_rows": int(grid_size[0]),
         "relative_depth_grid_cols": int(grid_size[1]),
         "relative_depth_pair_count": len(region_pairs),
+        "relative_depth_region_frame": (
+            "foreground_bbox" if use_foreground_bbox else "full_image"
+        ),
+        "relative_depth_bbox_padding_fraction": float(bbox_padding_fraction),
     }
     for idx, value in enumerate(depths):
         row[f"region_{idx}_depth"] = float(value)
@@ -153,6 +188,8 @@ def build_relative_depth_labels(
     statistic: str = "median",
     min_valid_fraction_per_region: float = 0.25,
     min_depth_margin: float = 0.02,
+    use_foreground_bbox: bool = False,
+    bbox_padding_fraction: float = 0.0,
 ) -> pd.DataFrame:
     """Build wide relative-depth labels for render manifest rows."""
     labels = []
@@ -176,6 +213,8 @@ def build_relative_depth_labels(
                     statistic=statistic,
                     min_valid_fraction_per_region=min_valid_fraction_per_region,
                     min_depth_margin=min_depth_margin,
+                    use_foreground_bbox=use_foreground_bbox,
+                    bbox_padding_fraction=bbox_padding_fraction,
                 )
             )
         except Exception as exc:
@@ -189,3 +228,82 @@ def build_relative_depth_labels(
             )
         labels.append(out)
     return pd.DataFrame(labels)
+
+
+def relative_depth_coverage_summary(
+    manifest_rows: Iterable[Mapping[str, Any]],
+    labels: pd.DataFrame,
+) -> pd.DataFrame:
+    """Summarize active pair coverage by split and texture condition."""
+    manifest = pd.DataFrame(list(manifest_rows))
+    if manifest.empty or labels.empty:
+        return pd.DataFrame(
+            columns=[
+                "split",
+                "texture_condition",
+                "example_count",
+                "valid_example_count",
+                "active_pair_count",
+            ]
+        )
+    required = {"render_id", "split", "texture_condition"}
+    missing = sorted(required - set(manifest.columns))
+    if missing:
+        raise ValueError("Manifest missing relative-depth coverage columns: " + ", ".join(missing))
+    merged = manifest.loc[:, ["render_id", "split", "texture_condition"]].merge(
+        labels,
+        on="render_id",
+        how="inner",
+        validate="one_to_one",
+    )
+    pair_valid_cols = sorted(
+        [
+            col
+            for col in labels.columns
+            if col.startswith("pair_") and col.endswith("_valid")
+        ],
+        key=lambda name: int(name.split("_")[1]),
+    )
+    rows = []
+    for (split, texture), group in merged.groupby(["split", "texture_condition"]):
+        active_pairs = int(sum(bool(group[col].astype(bool).any()) for col in pair_valid_cols))
+        valid_examples = (
+            int(group["label_valid"].astype(bool).sum())
+            if "label_valid" in group.columns
+            else 0
+        )
+        rows.append(
+            {
+                "split": str(split),
+                "texture_condition": str(texture),
+                "example_count": int(len(group)),
+                "valid_example_count": valid_examples,
+                "active_pair_count": active_pairs,
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["split", "texture_condition"]).reset_index(
+        drop=True
+    )
+
+
+def validate_relative_depth_coverage(
+    manifest_rows: Iterable[Mapping[str, Any]],
+    labels: pd.DataFrame,
+    *,
+    min_active_pairs: int = 4,
+    min_valid_examples: int = 1,
+) -> pd.DataFrame:
+    """Raise when any split/texture has insufficient relative-depth coverage."""
+    summary = relative_depth_coverage_summary(manifest_rows, labels)
+    if summary.empty:
+        raise ValueError("Relative-depth coverage is empty")
+    bad = summary[
+        (summary["active_pair_count"] < int(min_active_pairs))
+        | (summary["valid_example_count"] < int(min_valid_examples))
+    ]
+    if not bad.empty:
+        raise ValueError(
+            "Insufficient relative-depth label coverage:\n"
+            + bad.to_string(index=False)
+        )
+    return summary

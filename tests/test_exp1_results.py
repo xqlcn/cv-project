@@ -7,9 +7,12 @@ import pandas as pd
 import pytest
 from PIL import Image
 
-from exp1.analysis.plots import plot_layerwise_metrics
+from exp1.analysis.plots import plot_layerwise_metrics, plot_texture_drops
 from exp1.analysis.qualitative import make_qualitative_probe_table
-from exp1.evaluation.comparisons import compute_texture_dependence_drops
+from exp1.evaluation.comparisons import (
+    compute_texture_dependence_drops,
+    metric_direction,
+)
 from exp1.evaluation.metrics import (
     aggregate_prediction_bootstrap_cis,
     aggregate_probe_metrics,
@@ -139,6 +142,92 @@ def test_texture_dependence_drops_respect_metric_direction() -> None:
     assert by_task["relative_depth_regions"] == pytest.approx(0.2)
 
 
+def test_metric_direction_covers_dense_depth_metrics() -> None:
+    assert metric_direction("abs_rel_median") == "lower"
+    assert metric_direction("ssi_l1_median") == "lower"
+    assert metric_direction("pearson_r_mean") == "higher"
+    assert metric_direction("delta_1_mean") == "higher"
+
+
+def test_texture_dependence_drops_ignore_cross_texture_by_default() -> None:
+    results = pd.DataFrame(
+        [
+            {
+                "task": "relative_depth_regions",
+                "model": "clip",
+                "layer": "final",
+                "texture_condition": "photorealistic",
+                "train_texture_condition": "all",
+                "eval_texture_condition": "all",
+                "split": "test",
+                "metric": "valid_pair_accuracy",
+                "value": 0.8,
+            },
+            {
+                "task": "relative_depth_regions",
+                "model": "clip",
+                "layer": "final",
+                "texture_condition": "flat",
+                "train_texture_condition": "all",
+                "eval_texture_condition": "all",
+                "split": "test",
+                "metric": "valid_pair_accuracy",
+                "value": 0.7,
+            },
+            {
+                "task": "relative_depth_regions",
+                "model": "clip",
+                "layer": "final",
+                "texture_condition": "train_flat__test_random_noise",
+                "train_texture_condition": "flat",
+                "eval_texture_condition": "random_noise",
+                "split": "test",
+                "metric": "valid_pair_accuracy",
+                "value": 0.4,
+            },
+        ]
+    )
+
+    drops = compute_texture_dependence_drops(results)
+
+    assert drops["comparison_texture"].tolist() == ["flat"]
+
+
+def test_texture_dependence_drops_can_include_cross_texture() -> None:
+    results = pd.DataFrame(
+        [
+            {
+                "task": "relative_depth_regions",
+                "model": "clip",
+                "layer": "final",
+                "texture_condition": "photorealistic",
+                "train_texture_condition": "all",
+                "eval_texture_condition": "all",
+                "split": "test",
+                "metric": "valid_pair_accuracy",
+                "value": 0.8,
+            },
+            {
+                "task": "relative_depth_regions",
+                "model": "clip",
+                "layer": "final",
+                "texture_condition": "train_flat__test_random_noise",
+                "train_texture_condition": "flat",
+                "eval_texture_condition": "random_noise",
+                "split": "test",
+                "metric": "valid_pair_accuracy",
+                "value": 0.4,
+            },
+        ]
+    )
+
+    drops = compute_texture_dependence_drops(results, include_cross_texture=True)
+
+    assert drops["comparison_texture"].tolist() == [
+        "train_flat__test_random_noise"
+    ]
+
+
 def test_layerwise_plot_is_generated(tmp_path) -> None:
     results = pd.DataFrame(
         [
@@ -159,6 +248,28 @@ def test_layerwise_plot_is_generated(tmp_path) -> None:
 
     assert len(paths) == 1
     assert paths[0].is_file()
+
+
+def test_texture_drop_plot_defaults_to_test_split(tmp_path) -> None:
+    drops = pd.DataFrame(
+        [
+            {
+                "task": "relative_depth_regions",
+                "model": "clip",
+                "layer": "final",
+                "split": split,
+                "metric": "valid_pair_accuracy",
+                "comparison_texture": "flat",
+                "texture_drop": value,
+            }
+            for split, value in [("train", 0.1), ("test", 0.2)]
+        ]
+    )
+
+    paths = plot_texture_drops(drops, tmp_path)
+
+    assert len(paths) == 1
+    assert "test" in paths[0].name
 
 
 def test_qualitative_probe_table_is_generated_for_surface_normals(tmp_path) -> None:

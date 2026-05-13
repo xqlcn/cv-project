@@ -19,6 +19,7 @@ from exp1.metadata.manifest import load_manifest, save_manifest
 from exp1.tasks.camera import build_camera_labels
 from exp1.tasks.lighting import build_lighting_labels
 from exp1.tasks.relative_depth import build_relative_depth_labels
+from exp1.tasks.relative_depth import validate_relative_depth_coverage
 from exp1.tasks.scale import build_scale_labels
 from exp1.tasks.surface_normals import build_surface_normal_aggregate_labels
 
@@ -26,6 +27,7 @@ from exp1.tasks.surface_normals import build_surface_normal_aggregate_labels
 DEFAULT_TASKS = (
     "surface_normal_aggregate",
     "relative_depth_regions",
+    "dense_depth_patches",
     "camera",
     "camera_distance",
     "viewpoint",
@@ -144,7 +146,23 @@ def main() -> None:
                 task_cfg.min_valid_fraction_per_region
             ),
             min_depth_margin=float(task_cfg.min_depth_margin),
+            use_foreground_bbox=bool(task_cfg.get("use_foreground_bbox", False)),
+            bbox_padding_fraction=float(
+                task_cfg.get("bbox_padding_fraction", 0.0)
+            ),
         )
+        validation_cfg = task_cfg.get("validation", {}) or {}
+        if bool(validation_cfg.get("enabled", False)):
+            summary = validate_relative_depth_coverage(
+                records,
+                df,
+                min_active_pairs=int(validation_cfg.get("min_active_pairs", 4)),
+                min_valid_examples=int(
+                    validation_cfg.get("min_valid_examples", 1)
+                ),
+            )
+            print("Relative-depth coverage by split/texture:")
+            print(summary.to_string(index=False))
         path = _output_path(labels_dir, "relative_depth_regions", args.suffix)
         written.append(save_manifest(df, path, validate=False))
 

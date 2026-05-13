@@ -27,6 +27,10 @@ class RenderQCConfig:
     normal_norm_tolerance: float = 0.1
     depth_atol: float = 1e-4
     normal_atol: float = 1e-4
+    min_random_noise_rgb_std: float = 0.02
+    fail_low_random_noise_variation: bool = False
+    fail_random_noise_image_texture: bool = False
+    fail_material_override_mismatch: bool = False
 
 
 class RenderQCError(ValueError):
@@ -112,6 +116,62 @@ def qc_render_row(
     foreground_fraction = float(foreground_pixels / max(total_pixels, 1))
     out["qc_foreground_pixel_count"] = foreground_pixels
     out["qc_foreground_fraction"] = foreground_fraction
+    foreground_rgb = (
+        rgb[mask].astype(np.float32) / 255.0 if foreground_pixels else np.zeros((0, 3))
+    )
+    if len(foreground_rgb):
+        channel_std = foreground_rgb.std(axis=0)
+        luma = (
+            foreground_rgb[:, 0] * 0.2126
+            + foreground_rgb[:, 1] * 0.7152
+            + foreground_rgb[:, 2] * 0.0722
+        )
+        rgb_std_mean = float(channel_std.mean())
+        luma_std = float(luma.std())
+    else:
+        rgb_std_mean = 0.0
+        luma_std = 0.0
+    out["qc_foreground_rgb_std_mean"] = rgb_std_mean
+    out["qc_foreground_luma_std"] = luma_std
+    low_noise_variation = (
+        str(row.get("texture_condition", "")) == "random_noise"
+        and rgb_std_mean < float(config.min_random_noise_rgb_std)
+    )
+    out["qc_random_noise_low_variation"] = bool(low_noise_variation)
+    if low_noise_variation and bool(config.fail_low_random_noise_variation):
+        errors.append("random_noise_foreground_variance_too_low")
+    texture_condition = str(row.get("texture_condition", ""))
+    material_status = str(row.get("material_status", ""))
+    material_objects = int(row.get("material_object_count", 0) or 0)
+    material_overrides = int(row.get("material_override_object_count", 0) or 0)
+    override_expected = texture_condition in {"flat", "random_noise"}
+    override_mismatch = (
+        override_expected
+        and material_objects > 0
+        and material_overrides != material_objects
+    )
+    out["qc_material_override_mismatch"] = bool(override_mismatch)
+    if override_mismatch and bool(config.fail_material_override_mismatch):
+        errors.append("material_override_mismatch")
+    noise_image_texture = (
+        texture_condition == "random_noise"
+        and str(row.get("random_noise_texture_type", "")) == "image_texture"
+    )
+    out["qc_random_noise_uses_image_texture"] = bool(noise_image_texture)
+    if noise_image_texture and bool(config.fail_random_noise_image_texture):
+        errors.append("random_noise_uses_image_texture")
+    texture_status_mismatch = (
+        (texture_condition == "flat" and material_status != "flat_override")
+        or (
+            texture_condition == "random_noise"
+            and material_status != "random_noise_override"
+        )
+    )
+    out["qc_texture_condition_material_status_mismatch"] = bool(
+        texture_status_mismatch
+    )
+    if texture_status_mismatch and bool(config.fail_material_override_mismatch):
+        errors.append("texture_condition_material_status_mismatch")
 
     if foreground_fraction < config.min_foreground_fraction:
         errors.append("foreground_fraction_too_small")
