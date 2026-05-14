@@ -10,8 +10,8 @@ Produces:
   * Aggregate robustness summary table (CSV + markdown).
 
 Inputs (all configurable via CLI):
-  --main-dir   Path to the main rerender output (e.g. ``outputs/exp1_under12h_rerender``)
-  --dense-dir  Path to the dense rerender output (e.g. ``outputs/exp1_under12h_dense_rerender``)
+  --main-dir   Path to the main probe output tree (e.g. ``outputs/exp1_main``)
+  --dense-dir  Path to the dense probe output tree (e.g. ``outputs/exp1_dense``)
   --out-dir    Combined output directory (default ``outputs/exp1_rerender_analysis_figures``)
   --split      Which split to plot (default ``test``)
 """

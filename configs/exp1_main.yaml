@@ -9,16 +9,16 @@ hydra:
     dir: ${paths.project_root}/outputs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 experiment:
-  name: exp1_under12h
+  name: exp1_main
   seed: 20260512
-  description: Under-12-hour sampled Experiment 1 main geometry benchmark.
+  description: Canonical Experiment 1 main geometry benchmark (global CLS probes).
 
 paths:
-  exp1_root: ${paths.project_root}/data/exp1_under12h
-  probe_output_dir: ${paths.project_root}/outputs/exp1_under12h/probes
-  results_dir: ${paths.project_root}/outputs/exp1_under12h/results
-  figures_dir: ${paths.project_root}/outputs/exp1_under12h/figures
-  logs_dir: ${paths.project_root}/outputs/exp1_under12h/logs
+  exp1_root: ${paths.project_root}/data/exp1_main
+  probe_output_dir: ${paths.project_root}/outputs/exp1_main/probes
+  results_dir: ${paths.project_root}/outputs/exp1_main/results
+  figures_dir: ${paths.project_root}/outputs/exp1_main/figures
+  logs_dir: ${paths.project_root}/outputs/exp1_main/logs
 
 datasets:
   shapenet:

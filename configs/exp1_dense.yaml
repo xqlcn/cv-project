@@ -1,17 +1,17 @@
 defaults:
-  - exp1_under12h
+  - exp1_main
   - _self_
 
 experiment:
-  name: exp1_under12h_dense
-  description: Bounded dense patch-depth and patch-normal sub-study for sampled Experiment 1.
+  name: exp1_dense
+  description: Canonical Experiment 1 dense patch-depth / patch-normal sub-study.
 
 paths:
-  exp1_root: ${paths.project_root}/data/exp1_under12h_dense
-  probe_output_dir: ${paths.project_root}/outputs/exp1_under12h_dense/probes
-  results_dir: ${paths.project_root}/outputs/exp1_under12h_dense/results
-  figures_dir: ${paths.project_root}/outputs/exp1_under12h_dense/figures
-  logs_dir: ${paths.project_root}/outputs/exp1_under12h_dense/logs
+  exp1_root: ${paths.project_root}/data/exp1_dense
+  probe_output_dir: ${paths.project_root}/outputs/exp1_dense/probes
+  results_dir: ${paths.project_root}/outputs/exp1_dense/results
+  figures_dir: ${paths.project_root}/outputs/exp1_dense/figures
+  logs_dir: ${paths.project_root}/outputs/exp1_dense/logs
 
 assets:
   max_objects_per_category: 20

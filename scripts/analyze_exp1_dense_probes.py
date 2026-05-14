@@ -15,7 +15,7 @@ Data sources, in priority order:
 1. Weights & Biases project
    ``jczhang_-massachusetts-institute-of-technology/probe3d-exp1-dense-probes``
    (only used when ``wandb`` is importable and ``--from-wandb`` is requested).
-2. Local probe outputs under ``outputs/exp1_under12h_dense_rerender/`` (default).
+2. Local probe outputs under ``outputs/exp1_dense/`` (default).
    The W&B project mirrors this directory 1:1 according to
    ``notebooks/colab_exp1_zip_probe_training_wandb.ipynb`` (each W&B run
    uploads the same ``metrics.json`` / ``history.csv`` / ``predictions.csv``
@@ -67,14 +67,14 @@ from scripts.analysis._common import (  # noqa: E402
 WANDB_PROJECT = "probe3d-exp1-dense-probes"
 WANDB_ENTITY = "jczhang_-massachusetts-institute-of-technology"
 
-DEFAULT_PROBE_ROOT = PROJECT_ROOT / "outputs" / "exp1_under12h_dense_rerender" / "probes"
+DEFAULT_PROBE_ROOT = PROJECT_ROOT / "outputs" / "exp1_dense" / "probes"
 DEFAULT_RESULTS_CSV = (
-    PROJECT_ROOT / "outputs" / "exp1_under12h_dense_rerender" / "results" / "exp1_results_long.csv"
+    PROJECT_ROOT / "outputs" / "exp1_dense" / "results" / "exp1_results_long.csv"
 )
 DEFAULT_TEXTURE_DROPS_CSV = (
-    PROJECT_ROOT / "outputs" / "exp1_under12h_dense_rerender" / "results" / "exp1_texture_drops.csv"
+    PROJECT_ROOT / "outputs" / "exp1_dense" / "results" / "exp1_texture_drops.csv"
 )
-DEFAULT_MANIFEST = PROJECT_ROOT / "data" / "exp1_under12h_dense" / "manifests" / "render_valid.parquet"
+DEFAULT_MANIFEST = PROJECT_ROOT / "data" / "exp1_dense" / "manifests" / "render_valid.parquet"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "exp1_dense_probe_analysis"
 
 # Dense tasks recorded on W&B (one probe per (model, layer, task, within_texture))
@@ -1233,7 +1233,7 @@ def write_markdown_report(
     lines.append(
         f"This report analyzes **{n_runs} dense linear-probe runs** trained on frozen "
         f"patch features from the rerendered Experiment 1 dataset. The training was logged to the W&B project "
-        f"`{WANDB_ENTITY}/{WANDB_PROJECT}` (run group `exp1_under12h_dense_rerender`, "
+        f"`{WANDB_ENTITY}/{WANDB_PROJECT}` (run group `exp1_dense`, "
         "see `notebooks/colab_exp1_zip_probe_training_wandb.ipynb`)."
     )
     lines.append("")
@@ -1278,7 +1278,7 @@ def write_markdown_report(
         "(`metrics.json`, `history.csv`, `predictions.csv`, "
         "`predictions_<split>.npz`, `checkpoint.pt`). The W&B project is therefore a "
         "1:1 mirror of the local probe directory tree under "
-        "`outputs/exp1_under12h_dense_rerender/probes/`."
+        "`outputs/exp1_dense/probes/`."
     )
     lines.append("")
     lines.append("Concretely, this analysis pulled from:")
@@ -1289,23 +1289,23 @@ def write_markdown_report(
     )
     lines.append(
         "- Local per-probe metrics JSONs: "
-        "`outputs/exp1_under12h_dense_rerender/probes/<model>/<layer>/<task>/within_<texture>/metrics.json`."
+        "`outputs/exp1_dense/probes/<model>/<layer>/<task>/within_<texture>/metrics.json`."
     )
     lines.append(
         "- Local aggregated long-format CSV: "
-        "`outputs/exp1_under12h_dense_rerender/results/exp1_results_long.csv` (produced "
+        "`outputs/exp1_dense/results/exp1_results_long.csv` (produced "
         "by `scripts/aggregate_exp1_results.py`)."
     )
     lines.append(
         "- Local texture-drop CSV: "
-        "`outputs/exp1_under12h_dense_rerender/results/exp1_texture_drops.csv`."
+        "`outputs/exp1_dense/results/exp1_texture_drops.csv`."
     )
     lines.append(
         "- Local per-render dataframes: each `predictions.csv` under the probe directory above."
     )
     lines.append(
         "- Render manifest (state-space slicing): "
-        "`data/exp1_under12h_dense/manifests/render_valid.parquet`."
+        "`data/exp1_dense/manifests/render_valid.parquet`."
     )
     lines.append("")
     lines.append("Outputs of this analysis script:")
@@ -1358,7 +1358,7 @@ def write_markdown_report(
         lines.append(
             "- **Train/val/test split sizes** (from `metrics.json` metadata): "
             "train=326, val=67, test=69 renders **per texture condition**. Splits are object-disjoint and "
-            "deterministic by manifest; see `data/exp1_under12h_dense/manifests/render_valid.parquet`."
+            "deterministic by manifest; see `data/exp1_dense/manifests/render_valid.parquet`."
         )
     lines.append(
         "- **Metrics computed by the trainer**: for depth — `ssi_l1_mean/median`, "
@@ -1585,7 +1585,7 @@ def write_markdown_report(
     )
     lines.append(
         "- **One CLIP scale and one DINOv2 scale only** (ViT-B). CLIP ViT-L/14 and DINOv2 ViT-L were probed in the "
-        "global rerender (`outputs/exp1_under12h_rerender`) but not in this dense run group."
+        "global rerender (`outputs/exp1_main`) but not in this dense run group."
     )
     lines.append(
         "- **Cross-texture transfer not measured here**: the dense notebook intentionally runs only "
@@ -1982,7 +1982,7 @@ def main() -> None:
         manifest=manifest,
         run_meta=run_meta,
         data_source=(
-            "Local probe outputs at outputs/exp1_under12h_dense_rerender/ (W&B mirror not queried directly)"
+            "Local probe outputs at outputs/exp1_dense/ (W&B mirror not queried directly)"
             if wandb_meta is None
             else "Weights & Biases API + local probe outputs (cross-validated)"
         ),

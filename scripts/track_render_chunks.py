@@ -8,15 +8,15 @@ exists on disk for rows marked successful.
 Examples::
 
     PYTHONPATH=. python scripts/track_render_chunks.py \\
-      --config configs/exp1_under12h_dense.yaml
+      --config configs/exp1_dense.yaml
 
     PYTHONPATH=. python scripts/track_render_chunks.py \\
-      --chunks-dir data/exp1_under12h/manifests/render_chunks \\
+      --chunks-dir data/exp1_main/manifests/render_chunks \\
       --project-root .
 
     # Refresh every 10 seconds (good while parallel Blender workers run)
     PYTHONPATH=. python scripts/track_render_chunks.py \\
-      --config configs/exp1_under12h.yaml --watch 10 --verify-rgb
+      --config configs/exp1_main.yaml --watch 10 --verify-rgb
 """
 
 from __future__ import annotations

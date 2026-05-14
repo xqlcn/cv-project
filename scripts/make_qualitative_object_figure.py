@@ -8,7 +8,7 @@ feature extraction needed; all required predictions must already exist on disk.
 Example:
 
     PYTHONPATH=. python scripts/make_qualitative_object_figure.py \
-        --config configs/exp1_under12h.yaml \
+        --config configs/exp1_main.yaml \
         --category chair airplane \
         --task relative_depth_regions --layer final
 """

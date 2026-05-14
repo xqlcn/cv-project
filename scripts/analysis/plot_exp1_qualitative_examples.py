@@ -12,7 +12,7 @@ for depth or mean angular error for normals.
 
 Inputs are configurable via CLI; the script does not assume the Colab Drive
 mount paths recorded in metadata: it loads NPZ files directly from
-``<dense-dir>/probes/...`` and RGB/GT from ``data/exp1_under12h_dense/renders/...``
+``<dense-dir>/probes/...`` and RGB/GT from ``data/exp1_dense/renders/...``
 unless you override ``--renders-root``.
 """
 
@@ -54,13 +54,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=Path("data/exp1_under12h_dense/manifests/render_valid.parquet"),
+        default=Path("data/exp1_dense/manifests/render_valid.parquet"),
     )
     parser.add_argument(
         "--renders-root",
         type=Path,
         default=PROJECT_ROOT,
-        help="Project root containing data/exp1_under12h_dense/renders/...",
+        help="Project root containing data/exp1_dense/renders/...",
     )
     parser.add_argument(
         "--out-dir",

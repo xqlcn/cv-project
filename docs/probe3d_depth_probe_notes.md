@@ -73,7 +73,7 @@ Prepare the dense sub-study:
 
 ```bash
 PYTHONPATH=. python scripts/run_exp1_pipeline.py \
-  --config configs/exp1_under12h_dense.yaml \
+  --config configs/exp1_dense.yaml \
   --stages prepare
 ```
 
@@ -81,7 +81,7 @@ Render with the generated Blender chunk script, then post-process:
 
 ```bash
 PYTHONPATH=. python scripts/run_exp1_pipeline.py \
-  --config configs/exp1_under12h_dense.yaml \
+  --config configs/exp1_dense.yaml \
   --stages post_render
 ```
 
@@ -89,7 +89,7 @@ Extract patch grids with CLS features:
 
 ```bash
 PYTHONPATH=. python scripts/extract_exp1_patch_features.py \
-  --config configs/exp1_under12h_dense.yaml \
+  --config configs/exp1_dense.yaml \
   --models clip_vit_b16 dinov2_vit_b \
   --layers final layer4 layer8 layer12 \
   --include-cls
@@ -99,18 +99,10 @@ Train and aggregate dense probes:
 
 ```bash
 PYTHONPATH=. python scripts/train_all_dense_depth_probes.py \
-  --config configs/exp1_under12h_dense.yaml
+  --config configs/exp1_dense.yaml
 
 PYTHONPATH=. python scripts/aggregate_exp1_results.py \
-  --config configs/exp1_under12h_dense.yaml
-```
-
-Run a real-data smoke check:
-
-```bash
-PYTHONPATH=. python scripts/smoke_check_dense_depth.py \
-  --render-manifest data/exp1_under12h_dense/manifests/render_valid.parquet \
-  --patch-cache data/exp1_under12h_dense/features/clip_vit_b16/final_patch.npz
+  --config configs/exp1_dense.yaml
 ```
 
 ## Verification Checklist

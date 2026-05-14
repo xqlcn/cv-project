@@ -68,12 +68,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--main-manifest",
         type=Path,
-        default=Path("data/exp1_under12h/manifests/render_valid.parquet"),
+        default=Path("data/exp1_main/manifests/render_valid.parquet"),
     )
     parser.add_argument(
         "--dense-manifest",
         type=Path,
-        default=Path("data/exp1_under12h_dense/manifests/render_valid.parquet"),
+        default=Path("data/exp1_dense/manifests/render_valid.parquet"),
     )
     parser.add_argument(
         "--out-dir",
