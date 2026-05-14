@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from exp1.analysis.plots import plot_layerwise_metrics, plot_texture_drops
 from exp1.analysis.qualitative import (
     make_dense_depth_qualitative_table,
+    make_dense_surface_normal_qualitative_table,
     make_qualitative_probe_tables,
 )
 from exp1.config import default_exp1_config_path, load_exp1_config, resolve_path
@@ -123,6 +124,22 @@ def main() -> None:
             str(model): model_display_names.get(str(model), str(model))
             for model in dense_enabled
         }
+        try:
+            normal_path = make_dense_surface_normal_qualitative_table(
+                manifest_path=manifest_path,
+                probe_root=probe_root,
+                output_path=figures_dir
+                / f"qualitative_dense_surface_normal_patches_{layer_name}.png",
+                project_root=project_root,
+                model_display_order=dense_model_display,
+                layer_name=layer_name,
+                textures=[str(texture) for texture in cfg.textures.conditions],
+                preferred_split="test",
+            )
+        except (FileNotFoundError, ValueError, KeyError):
+            normal_path = None
+        if normal_path is not None:
+            paths.append(normal_path)
         try:
             dense_path = make_dense_depth_qualitative_table(
                 manifest_path=manifest_path,

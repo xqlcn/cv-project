@@ -8,7 +8,10 @@ import pytest
 from PIL import Image
 
 from exp1.analysis.plots import plot_layerwise_metrics, plot_texture_drops
-from exp1.analysis.qualitative import make_qualitative_probe_table
+from exp1.analysis.qualitative import (
+    make_dense_surface_normal_qualitative_table,
+    make_qualitative_probe_table,
+)
 from exp1.evaluation.comparisons import (
     compute_texture_dependence_drops,
     metric_direction,
@@ -40,9 +43,9 @@ def test_aggregate_probe_metrics_builds_long_table(tmp_path) -> None:
         probe_root
         / "clip_vit_b16"
         / "final"
-        / "surface_normal_aggregate"
+        / "dense_surface_normal_patches"
         / "metrics.json",
-        task="surface_normal_aggregate",
+        task="dense_surface_normal_patches",
         model="clip_vit_b16",
         layer="final",
         texture="photorealistic",
@@ -52,7 +55,7 @@ def test_aggregate_probe_metrics_builds_long_table(tmp_path) -> None:
 
     table = aggregate_probe_metrics(probe_root)
 
-    assert list(table["task"]) == ["surface_normal_aggregate"]
+    assert list(table["task"]) == ["dense_surface_normal_patches"]
     assert list(table["model"]) == ["clip_vit_b16"]
     assert list(table["split"]) == ["test"]
     assert list(table["metric"]) == ["angular_error_deg_mean"]
@@ -65,7 +68,7 @@ def test_aggregate_probe_metrics_labels_cross_texture_runs(tmp_path) -> None:
         probe_root
         / "clip_vit_b16"
         / "final"
-        / "surface_normal_aggregate"
+        / "dense_surface_normal_patches"
         / "train_flat__test_random_noise"
         / "metrics.json"
     )
@@ -74,7 +77,7 @@ def test_aggregate_probe_metrics_labels_cross_texture_runs(tmp_path) -> None:
         json.dumps(
             {
                 "metadata": {
-                    "task": "surface_normal_aggregate",
+                    "task": "dense_surface_normal_patches",
                     "model_name": "clip_vit_b16",
                     "layer_name": "final",
                     "train_texture_condition": ["flat"],
@@ -97,7 +100,7 @@ def test_texture_dependence_drops_respect_metric_direction() -> None:
     results = pd.DataFrame(
         [
             {
-                "task": "surface_normal_aggregate",
+                "task": "dense_surface_normal_patches",
                 "model": "clip",
                 "layer": "final",
                 "texture_condition": "photorealistic",
@@ -106,7 +109,7 @@ def test_texture_dependence_drops_respect_metric_direction() -> None:
                 "value": 20.0,
             },
             {
-                "task": "surface_normal_aggregate",
+                "task": "dense_surface_normal_patches",
                 "model": "clip",
                 "layer": "final",
                 "texture_condition": "flat",
@@ -138,7 +141,7 @@ def test_texture_dependence_drops_respect_metric_direction() -> None:
     drops = compute_texture_dependence_drops(results)
 
     by_task = {row.task: row.texture_drop for row in drops.itertuples()}
-    assert by_task["surface_normal_aggregate"] == 5.0
+    assert by_task["dense_surface_normal_patches"] == 5.0
     assert by_task["relative_depth_regions"] == pytest.approx(0.2)
 
 
@@ -232,7 +235,7 @@ def test_layerwise_plot_is_generated(tmp_path) -> None:
     results = pd.DataFrame(
         [
             {
-                "task": "surface_normal_aggregate",
+                "task": "dense_surface_normal_patches",
                 "model": "clip",
                 "layer": layer,
                 "texture_condition": "flat",
@@ -272,18 +275,21 @@ def test_texture_drop_plot_defaults_to_test_split(tmp_path) -> None:
     assert "test" in paths[0].name
 
 
-def test_qualitative_probe_table_is_generated_for_surface_normals(tmp_path) -> None:
+def test_dense_surface_normal_qualitative_table_is_generated(tmp_path) -> None:
     textures = ["photorealistic", "flat", "random_noise"]
     rows = []
-    label_rows = []
     probe_root = tmp_path / "probes"
     for idx, texture in enumerate(textures):
         render_id = f"render_{idx}"
         rgb_path = tmp_path / f"{texture}.png"
         mask_path = tmp_path / f"{texture}_mask.npy"
+        normal_path = tmp_path / f"{texture}_normal.npy"
         image = Image.new("RGB", (16, 16), (40 + idx * 40, 80, 120))
         image.save(rgb_path)
         np.save(mask_path, np.ones((16, 16), dtype=bool))
+        normal = np.zeros((16, 16, 3), dtype=np.float32)
+        normal[..., 2] = 1.0
+        np.save(normal_path, normal)
         rows.append(
             {
                 "render_id": render_id,
@@ -292,46 +298,34 @@ def test_qualitative_probe_table_is_generated_for_surface_normals(tmp_path) -> N
                 "texture_control_group_id": "group_0",
                 "rgb_path": str(rgb_path),
                 "mask_path": str(mask_path),
-            }
-        )
-        label_rows.append(
-            {
-                "render_id": render_id,
-                "mean_normal_x": 0.0,
-                "mean_normal_y": 0.0,
-                "mean_normal_z": 1.0,
-                "label_valid": True,
+                "normal_path": str(normal_path),
             }
         )
         pred_dir = (
             probe_root
             / "clip_vit_b16"
             / "final"
-            / "surface_normal_aggregate"
+            / "dense_surface_normal_patches"
             / f"texture_{texture}"
         )
         pred_dir.mkdir(parents=True)
-        pd.DataFrame(
-            [
-                {
-                    "render_id": render_id,
-                    "split": "test",
-                    "pred_mean_normal_x": 0.0,
-                    "pred_mean_normal_y": 0.0,
-                    "pred_mean_normal_z": 1.0,
-                }
-            ]
-        ).to_csv(pred_dir / "predictions.csv", index=False)
+        predictions = np.zeros((1, 4, 4, 3), dtype=np.float32)
+        predictions[..., 2] = 1.0
+        targets = predictions.copy()
+        valid = np.ones((1, 4, 4), dtype=bool)
+        np.savez_compressed(
+            pred_dir / "predictions_test.npz",
+            render_ids=np.asarray([render_id], dtype=str),
+            predictions=predictions,
+            targets=targets,
+            valid=valid,
+        )
 
     manifest_path = tmp_path / "manifest.csv"
-    label_path = tmp_path / "labels.csv"
     pd.DataFrame(rows).to_csv(manifest_path, index=False)
-    pd.DataFrame(label_rows).to_csv(label_path, index=False)
 
-    output = make_qualitative_probe_table(
-        task="surface_normal_aggregate",
+    output = make_dense_surface_normal_qualitative_table(
         manifest_path=manifest_path,
-        label_path=label_path,
         probe_root=probe_root,
         output_path=tmp_path / "qualitative.png",
         project_root=tmp_path,
@@ -428,7 +422,7 @@ def test_aggregate_prediction_bootstrap_cis_uses_object_units(tmp_path) -> None:
         / "probes"
         / "clip"
         / "final"
-        / "surface_normal_aggregate"
+        / "dense_surface_normal_patches"
         / "texture_flat"
     )
     probe_dir.mkdir(parents=True)
@@ -436,7 +430,7 @@ def test_aggregate_prediction_bootstrap_cis_uses_object_units(tmp_path) -> None:
         json.dumps(
             {
                 "metadata": {
-                    "task": "surface_normal_aggregate",
+                    "task": "dense_surface_normal_patches",
                     "model_name": "clip",
                     "layer_name": "final",
                     "texture_condition": ["flat"],

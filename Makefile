@@ -38,6 +38,7 @@ exp1-bounded-dense-patches:
 
 exp1-bounded-dense-probes:
 	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/train_all_dense_depth_probes.py --config $(EXP1_BOUNDED_CONFIG)
+	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/train_all_dense_surface_normal_probes.py --config $(EXP1_BOUNDED_CONFIG)
 
 exp1-bounded-dense:
 	HF_HOME=$(HF_HOME) PYTHONPATH=. $(PYTHON) scripts/run_exp1_pipeline.py --config $(EXP1_BOUNDED_CONFIG) --stages dense

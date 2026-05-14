@@ -94,7 +94,7 @@ def test_render_blender_config_loads_without_pyyaml(monkeypatch) -> None:
 
 
 def test_random_noise_material_mode_maps_to_existing_helper() -> None:
-    assert material_mode("random_noise") == "image_noise"
+    assert material_mode("random_noise") == "random_noise"
     assert material_mode("flat") == "flat"
 
 
@@ -164,7 +164,10 @@ def test_photorealistic_fallback_reason_honors_manifest_flags() -> None:
     assert reason == "manifest_marks_material_unavailable"
 
 
-def test_random_noise_material_uses_saved_image_texture(monkeypatch, tmp_path) -> None:
+def test_random_noise_material_uses_procedural_shader_by_default(
+    monkeypatch,
+    tmp_path,
+) -> None:
     calls = _install_fake_material_utils(monkeypatch)
     record = {
         "texture_condition": "random_noise",
@@ -175,10 +178,10 @@ def test_random_noise_material_uses_saved_image_texture(monkeypatch, tmp_path) -
     meta = apply_materials([_FakeObject()], record, {})
 
     assert meta["material_status"] == "random_noise_override"
-    assert meta["random_noise_texture_type"] == "image_texture"
-    assert meta["random_texture_path"].endswith("random_texture.png")
-    assert calls[0]["texture_type"] == "image_noise"
-    assert calls[0]["image_texture_path"] == meta["random_texture_path"]
+    assert meta["random_noise_texture_type"] == "procedural_noise"
+    assert meta["random_texture_path"] == ""
+    assert calls[0]["texture_type"] == "random_noise"
+    assert calls[0]["image_texture_path"] == ""
 
 
 def test_random_texture_png_writer_outputs_seeded_noise(tmp_path) -> None:

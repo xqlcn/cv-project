@@ -98,24 +98,6 @@ def _load_mask(mask_path: Union[str, Path], project_root: Path) -> np.ndarray:
     )
 
 
-def _masked_vector_image(
-    vector: Sequence[float],
-    mask_path: Union[str, Path],
-    project_root: Path,
-    *,
-    size: int,
-) -> np.ndarray:
-    mask = _load_mask(mask_path, project_root)
-    vector_arr = np.asarray(vector, dtype=np.float32)
-    norm = float(np.linalg.norm(vector_arr))
-    if np.isfinite(norm) and norm > 1e-8:
-        vector_arr = vector_arr / norm
-    color = _normal_to_rgb(vector_arr.reshape(1, 1, 3))[0, 0]
-    image = np.full((*mask.shape, 3), 255, dtype=np.uint8)
-    image[mask] = color
-    return _fit_image(Image.fromarray(image), size=size)
-
-
 def _dense_normal_image(
     manifest_row: Mapping[str, Any],
     project_root: Path,
@@ -167,55 +149,6 @@ def _dense_depth_image(
     rgb = (rgba[..., :3] * 255.0).astype(np.uint8)
     rgb[~valid] = 255
     return _fit_image(Image.fromarray(rgb), size=size)
-
-
-def _surface_normal_ground_truth(
-    label_row: pd.Series,
-    manifest_row: Mapping[str, Any],
-    project_root: Path,
-    *,
-    size: int,
-) -> np.ndarray:
-    del label_row  # dense rendered normal map is the most informative ground truth
-    return _dense_normal_image(manifest_row, project_root, size=size)
-
-
-def _angular_error_degrees(
-    pred: Sequence[float], target: Sequence[float]
-) -> Optional[float]:
-    pred_arr = np.asarray(pred, dtype=np.float32)
-    target_arr = np.asarray(target, dtype=np.float32)
-    p_norm = float(np.linalg.norm(pred_arr))
-    t_norm = float(np.linalg.norm(target_arr))
-    if not np.isfinite(p_norm) or not np.isfinite(t_norm) or p_norm < 1e-8 or t_norm < 1e-8:
-        return None
-    cos = float(np.dot(pred_arr, target_arr) / (p_norm * t_norm))
-    cos = max(min(cos, 1.0), -1.0)
-    return float(np.degrees(np.arccos(cos)))
-
-
-def _surface_normal_prediction(
-    pred_row: pd.Series,
-    label_row: pd.Series,
-    manifest_row: Mapping[str, Any],
-    project_root: Path,
-    *,
-    size: int,
-) -> tuple[np.ndarray, Optional[str]]:
-    vector = [
-        pred_row["pred_mean_normal_x"],
-        pred_row["pred_mean_normal_y"],
-        pred_row["pred_mean_normal_z"],
-    ]
-    target = [
-        label_row.get("mean_normal_x", np.nan),
-        label_row.get("mean_normal_y", np.nan),
-        label_row.get("mean_normal_z", np.nan),
-    ]
-    image = _masked_vector_image(vector, manifest_row["mask_path"], project_root, size=size)
-    angle = _angular_error_degrees(vector, target)
-    caption = f"err {angle:.1f}\u00b0" if angle is not None else None
-    return image, caption
 
 
 def _pair_count(row: pd.Series) -> int:
@@ -647,19 +580,7 @@ def make_qualitative_probe_table(
             (None, TEXTURE_DISPLAY_NAMES.get(texture, texture)),
             (rgb, None),
         ]
-        if task == "surface_normal_aggregate":
-            row_images.append(
-                (
-                    _surface_normal_ground_truth(
-                        label_row,
-                        manifest_row,
-                        project_root,
-                        size=image_size,
-                    ),
-                    "dense normal map",
-                )
-            )
-        elif task == "relative_depth_regions":
+        if task == "relative_depth_regions":
             row_images.append(
                 (
                     _dense_depth_image(manifest_row, project_root, size=image_size),
@@ -684,16 +605,7 @@ def make_qualitative_probe_table(
                 row_images.append((image, text))
                 continue
             pred_row = candidates.iloc[0]
-            if task == "surface_normal_aggregate":
-                image, caption = _surface_normal_prediction(
-                    pred_row,
-                    label_row,
-                    manifest_row,
-                    project_root,
-                    size=image_size,
-                )
-                row_images.append((image, caption))
-            elif task == "relative_depth_regions":
+            if task == "relative_depth_regions":
                 image, caption = _relative_depth_pair_overlay(
                     label_row,
                     pred_row,
@@ -734,11 +646,6 @@ def make_qualitative_probe_table(
         subtitle = (
             "3x3 region pair ordering; arrows point from closer to farther region. "
             "Green = probe matches ground truth, red = wrong, yellow = ground truth."
-        )
-    elif task == "surface_normal_aggregate":
-        subtitle = (
-            "Ground truth: rendered per-pixel normal map (camera frame). "
-            "Probe outputs a single aggregate normal vector (flat fill)."
         )
     else:
         subtitle = ""
@@ -796,6 +703,40 @@ def _depth_prediction_path(
         / model_name
         / layer_name
         / "dense_relative_depth"
+        / "all_textures"
+        / f"predictions_{split}.npz",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _normal_prediction_path(
+    probe_root: Path,
+    *,
+    model_name: str,
+    layer_name: str,
+    texture: str,
+    split: str,
+) -> Optional[Path]:
+    candidates = [
+        probe_root
+        / model_name
+        / layer_name
+        / "dense_surface_normal_patches"
+        / f"within_{texture}"
+        / f"predictions_{split}.npz",
+        probe_root
+        / model_name
+        / layer_name
+        / "dense_surface_normal_patches"
+        / f"texture_{texture}"
+        / f"predictions_{split}.npz",
+        probe_root
+        / model_name
+        / layer_name
+        / "dense_surface_normal_patches"
         / "all_textures"
         / f"predictions_{split}.npz",
     ]
@@ -904,6 +845,46 @@ def _dense_prediction_image(
     return _fit_image(Image.fromarray(rgb), size=image_size)
 
 
+def _dense_normal_prediction_image(
+    pred_grid: np.ndarray,
+    valid_grid: np.ndarray,
+    *,
+    image_size: int,
+    target_resolution: int = 224,
+    object_mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Bilinearly upsample a (P,P,3) predicted normal grid and colorize."""
+    if pred_grid.size == 0:
+        placeholder, _ = _placeholder("no\nprediction", size=image_size)
+        return placeholder
+    pred = np.asarray(pred_grid, dtype=np.float32)
+    channels = []
+    for idx in range(3):
+        channel = Image.fromarray(pred[..., idx]).resize(
+            (target_resolution, target_resolution),
+            Image.BILINEAR,
+        )
+        channels.append(np.asarray(channel, dtype=np.float32))
+    upsampled = np.stack(channels, axis=-1)
+    norm = np.linalg.norm(upsampled, axis=-1, keepdims=True)
+    upsampled = np.divide(
+        upsampled,
+        np.clip(norm, 1e-8, None),
+        out=np.zeros_like(upsampled),
+        where=np.isfinite(norm),
+    )
+    valid_pil = Image.fromarray(valid_grid.astype(np.uint8) * 255).resize(
+        (target_resolution, target_resolution),
+        Image.NEAREST,
+    )
+    upsampled_mask = np.asarray(valid_pil, dtype=np.uint8) > 127
+    if object_mask is not None:
+        upsampled_mask = upsampled_mask & object_mask.astype(bool)
+    rgb = _normal_to_rgb(upsampled)
+    rgb[~upsampled_mask] = 255
+    return _fit_image(Image.fromarray(rgb), size=image_size)
+
+
 def _align_prediction_to_target(
     pred: np.ndarray, target: np.ndarray, mask: np.ndarray
 ) -> np.ndarray:
@@ -954,6 +935,203 @@ def _load_dense_predictions_for_models(
                         "valid": np.asarray(data["valid"], dtype=bool),
                     }
     return payloads
+
+
+def _load_dense_normal_predictions_for_models(
+    probe_root: Path,
+    *,
+    model_names: Sequence[str],
+    layer_name: str,
+    textures: Sequence[str],
+    splits: Sequence[str] = ("test", "val", "train"),
+) -> dict[tuple[str, str, str], dict[str, np.ndarray]]:
+    """Load dense-normal predictions keyed by (model, texture, split)."""
+    payloads: dict[tuple[str, str, str], dict[str, np.ndarray]] = {}
+    for model_name in model_names:
+        for texture in textures:
+            for split in splits:
+                path = _normal_prediction_path(
+                    probe_root,
+                    model_name=model_name,
+                    layer_name=layer_name,
+                    texture=texture,
+                    split=split,
+                )
+                if path is None:
+                    continue
+                with np.load(path, allow_pickle=False) as data:
+                    payloads[(model_name, texture, split)] = {
+                        "render_ids": np.asarray(data["render_ids"], dtype=str),
+                        "predictions": np.asarray(data["predictions"], dtype=np.float32),
+                        "targets": np.asarray(data["targets"], dtype=np.float32),
+                        "valid": np.asarray(data["valid"], dtype=bool),
+                    }
+    return payloads
+
+
+def make_dense_surface_normal_qualitative_table(
+    *,
+    manifest_path: Union[str, Path],
+    probe_root: Union[str, Path],
+    output_path: Union[str, Path],
+    project_root: Union[str, Path],
+    model_display_order: Optional[Mapping[str, str]] = None,
+    layer_name: str = "final",
+    textures: Sequence[str] = ("photorealistic", "flat", "random_noise"),
+    preferred_split: str = "test",
+    image_size: int = 200,
+) -> Optional[Path]:
+    """Create a dense surface-normal qualitative table."""
+    project_root = Path(project_root)
+    probe_root = Path(probe_root)
+    output_path = Path(output_path)
+    model_display_order = dict(model_display_order or DEFAULT_MODEL_DISPLAY_ORDER)
+    model_names = list(model_display_order.keys())
+
+    manifest = load_manifest(manifest_path, validate=False)
+    predictions_by_key = _load_dense_normal_predictions_for_models(
+        probe_root,
+        model_names=model_names,
+        layer_name=layer_name,
+        textures=textures,
+    )
+    if not predictions_by_key:
+        return None
+
+    available_render_ids: set[str] = set()
+    for payload in predictions_by_key.values():
+        available_render_ids.update(payload["render_ids"].tolist())
+    rows = manifest[manifest["render_id"].astype(str).isin(available_render_ids)].copy()
+    rows = rows[rows["texture_condition"].astype(str).isin(set(textures))]
+    split_order = [preferred_split] + [
+        split
+        for split in ("test", "val", "train")
+        if split != preferred_split and split in set(rows["split"].astype(str))
+    ]
+    group_column = _control_group_column(rows)
+    if group_column is None:
+        group_cols = _fallback_group_columns(rows)
+        rows["_qualitative_group"] = rows[group_cols].astype(str).agg("|".join, axis=1)
+        group_column = "_qualitative_group"
+
+    triplet: Optional[dict[str, pd.Series]] = None
+    chosen_split: Optional[str] = None
+    for split in split_order:
+        split_rows = rows[rows["split"].astype(str) == split]
+        for _, group in split_rows.groupby(group_column, sort=True):
+            by_texture: dict[str, pd.Series] = {}
+            for texture in textures:
+                texture_rows = group[group["texture_condition"].astype(str) == texture]
+                if texture_rows.empty:
+                    break
+                by_texture[texture] = texture_rows.sort_values("render_id").iloc[0]
+            if len(by_texture) == len(textures):
+                triplet = by_texture
+                chosen_split = split
+                break
+        if triplet is not None:
+            break
+    if triplet is None or chosen_split is None:
+        return None
+
+    columns = ["Texture Type", "Input Image", "Ground Truth"]
+    columns.extend(model_display_order.values())
+    plt = _pyplot()
+    fig, axes = plt.subplots(
+        len(textures),
+        len(columns),
+        figsize=(2.1 * len(columns), 2.45 * len(textures)),
+        squeeze=False,
+    )
+    for row_idx, texture in enumerate(textures):
+        manifest_row = triplet[texture]
+        render_id = str(manifest_row["render_id"])
+        object_mask = _dense_object_mask(
+            manifest_row,
+            project_root,
+            target_resolution=224,
+        )
+        row_cells: list[tuple[Optional[np.ndarray], Optional[str]]] = [
+            (None, TEXTURE_DISPLAY_NAMES.get(texture, texture)),
+            (_rgb_image(manifest_row, project_root, size=image_size), None),
+            (_dense_normal_image(manifest_row, project_root, size=image_size), "normal map"),
+        ]
+        for model_name in model_names:
+            payload = predictions_by_key.get((model_name, texture, chosen_split))
+            if payload is None:
+                for split in ("test", "val", "train"):
+                    payload = predictions_by_key.get((model_name, texture, split))
+                    if payload is not None:
+                        break
+            if payload is None:
+                row_cells.append(_placeholder("not run", size=image_size))
+                continue
+            matches = np.where(payload["render_ids"] == render_id)[0]
+            if len(matches) == 0:
+                row_cells.append(_placeholder("no row", size=image_size))
+                continue
+            idx = int(matches[0])
+            pred_grid = payload["predictions"][idx]
+            valid_grid = payload["valid"][idx]
+            target_grid = payload["targets"][idx]
+            image = _dense_normal_prediction_image(
+                pred_grid,
+                valid_grid,
+                image_size=image_size,
+                object_mask=object_mask,
+            )
+            valid_flat = valid_grid & np.isfinite(target_grid).all(axis=-1)
+            caption: Optional[str] = None
+            if valid_flat.any():
+                pred_unit = pred_grid / np.clip(
+                    np.linalg.norm(pred_grid, axis=-1, keepdims=True),
+                    1e-8,
+                    None,
+                )
+                cos = np.clip((pred_unit * target_grid).sum(axis=-1), -1.0, 1.0)
+                err = np.degrees(np.arccos(cos))[valid_flat]
+                caption = f"err {float(err.mean()):.1f} deg"
+            row_cells.append((image, caption))
+
+        for col_idx, (image, text) in enumerate(row_cells):
+            ax = axes[row_idx, col_idx]
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            if image is not None:
+                ax.imshow(image)
+            if text:
+                if image is None:
+                    ax.text(0.5, 0.5, text, ha="center", va="center", wrap=True)
+                else:
+                    ax.text(
+                        0.5,
+                        -0.10,
+                        text,
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="top",
+                        fontsize=7,
+                        color="#444",
+                    )
+            if row_idx == 0:
+                ax.set_title(columns[col_idx], fontsize=9)
+
+    subtitle = (
+        "Patch-normal probes are bilinearly upsampled and masked to the rendered "
+        "foreground. Colors encode camera-frame normals as xyz -> RGB."
+    )
+    fig.suptitle(
+        f"dense surface-normal qualitative examples ({layer_name})\n"
+        + textwrap.fill(subtitle, width=110),
+        fontsize=10,
+    )
+    fig.tight_layout(rect=(0, 0.04, 1, 0.86))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return output_path
 
 
 def make_dense_depth_qualitative_table(

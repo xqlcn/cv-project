@@ -89,7 +89,8 @@ render_plan:
 models:
   enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
   layers: ["final", "layer4", "layer8", "layer12"]
-  dense_layers: null
+  dense_enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
+  dense_layers: ["final", "layer4", "layer8", "layer12"]
   definitions:
     dinov2_vit_b:
       image_size: 224
@@ -101,7 +102,7 @@ features:
 
 tasks:
   enabled:
-    - surface_normal_aggregate
+    - dense_surface_normal_patches
     - relative_depth_regions
     - viewpoint
     - lighting_direction

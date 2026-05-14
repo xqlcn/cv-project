@@ -21,11 +21,10 @@ from exp1.tasks.lighting import build_lighting_labels
 from exp1.tasks.relative_depth import build_relative_depth_labels
 from exp1.tasks.relative_depth import validate_relative_depth_coverage
 from exp1.tasks.scale import build_scale_labels
-from exp1.tasks.surface_normals import build_surface_normal_aggregate_labels
 
 
 DEFAULT_TASKS = (
-    "surface_normal_aggregate",
+    "dense_surface_normal_patches",
     "relative_depth_regions",
     "dense_depth_patches",
     "camera",
@@ -124,16 +123,6 @@ def main() -> None:
     definitions = cfg.tasks.definitions
 
     written = []
-    if "surface_normal_aggregate" in tasks:
-        task_cfg = definitions.surface_normal_aggregate
-        df = build_surface_normal_aggregate_labels(
-            records,
-            project_root=project_root,
-            min_valid_pixels=int(task_cfg.min_valid_pixels),
-        )
-        path = _output_path(labels_dir, "surface_normal_aggregate", args.suffix)
-        written.append(save_manifest(df, path, validate=False))
-
     if "relative_depth_regions" in tasks:
         task_cfg = definitions.relative_depth_regions
         df = build_relative_depth_labels(

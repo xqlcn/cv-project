@@ -26,7 +26,10 @@ from exp1.metadata.manifest import load_manifest
 
 
 PRIMARY_METRICS = {
-    "surface_normal_aggregate": ["angular_error_deg_mean", "angular_error_deg_median"],
+    "dense_surface_normal_patches": [
+        "angular_error_deg_mean",
+        "angular_error_deg_median",
+    ],
     "relative_depth_regions": ["balanced_accuracy", "valid_pair_accuracy"],
 }
 
@@ -146,7 +149,6 @@ def main() -> None:
 
     manifest = load_manifest(manifest_path, validate=False)
     results = load_results_table(results_path) if Path(results_path).is_file() else None
-    surface_labels = labels_dir / "labels_surface_normal_aggregate.parquet"
     rel_labels = labels_dir / "labels_relative_depth_regions.parquet"
 
     rel_dist = None
@@ -200,14 +202,6 @@ def main() -> None:
 
     lines.extend(["", "## Feature Cache Alignment", ""])
     lines.append(_format_table(feature_cache_summary(feature_dir, manifest)))
-
-    if surface_labels.is_file():
-        surface = load_manifest(surface_labels, validate=False)
-        lines.extend(["", "## Surface Normal Labels", ""])
-        stats = surface[
-            ["label_valid", "mean_normal_x", "mean_normal_y", "mean_normal_z"]
-        ].describe(include="all")
-        lines.append(_format_table(stats.reset_index().round(4)))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

@@ -114,7 +114,7 @@ make exp1-mvp-plan
 Use `configs/exp1_bounded.yaml` as the next non-toy scale-up config. It keeps
 the core geometry probes only:
 
-- `surface_normal_aggregate`;
+- `dense_surface_normal_patches`;
 - `relative_depth_regions`.
 
 Before rendering, estimate the render count and storage:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shlex
 import stat
@@ -36,7 +37,7 @@ STAGE_ALIASES = {
         "contact_sheet",
         "labels",
     ],
-    "ml": ["features", "probes", "aggregate", "figures"],
+    "ml": ["features", "probes", "patch_features", "dense_probes", "aggregate", "figures"],
     "dense": ["patch_features", "dense_probes", "aggregate", "figures"],
     "all": [
         "preprocess_assets",
@@ -180,6 +181,34 @@ def _chunk_path(chunks_dir: Path, index: int) -> Path:
     return chunks_dir / f"chunk_{index:04d}.jsonl"
 
 
+def _json_safe_value(value):
+    """Convert pandas/numpy manifest values into JSONL-safe Python values."""
+    if value is None:
+        return None
+    if isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(v) for v in value]
+    if hasattr(value, "tolist"):
+        return _json_safe_value(value.tolist())
+    if hasattr(value, "item"):
+        try:
+            return _json_safe_value(value.item())
+        except (TypeError, ValueError):
+            pass
+    return str(value)
+
+
+def _json_safe_row(row: dict) -> dict:
+    return {str(key): _json_safe_value(value) for key, value in row.items()}
+
+
 def write_render_chunks(
     render_plan: Path,
     chunks_dir: Path,
@@ -192,7 +221,10 @@ def write_render_chunks(
     command_manifest: Optional[Path] = None,
 ) -> list[Path]:
     """Split a render plan and write local/distributed Blender commands."""
-    rows = load_manifest(render_plan, validate=False).to_dict(orient="records")
+    rows = [
+        _json_safe_row(row)
+        for row in load_manifest(render_plan, validate=False).to_dict(orient="records")
+    ]
     chunks_dir.mkdir(parents=True, exist_ok=True)
     stale_paths = {
         *chunks_dir.glob("chunk_*.jsonl"),
@@ -270,7 +302,11 @@ def write_render_chunks(
 def combine_render_status_chunks(chunks_dir: Path, output_path: Path) -> Path:
     """Combine Blender per-chunk status JSONL files into one manifest."""
     status_paths = sorted(chunks_dir.glob("chunk_*.render_status.jsonl"))
-    chunk_paths = sorted(chunks_dir.glob("chunk_*.jsonl"))
+    chunk_paths = sorted(
+        path
+        for path in chunks_dir.glob("chunk_*.jsonl")
+        if ".render_status" not in path.name
+    )
     if not status_paths:
         raise FileNotFoundError(f"No render status chunks found under {chunks_dir}")
     if chunk_paths and len(status_paths) != len(chunk_paths):
@@ -593,6 +629,7 @@ def main() -> None:
         )
 
     dense_layers = cfg.models.get("dense_layers")
+    dense_tasks = {str(task) for task in cfg.tasks.enabled}
     if dense_layers:
         dense_enabled = cfg.models.get("dense_enabled") or cfg.models.enabled
         patch_outputs = [
@@ -620,12 +657,24 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
 
-        if "dense_probes" in stages:
+        if "dense_probes" in stages and "dense_depth_patches" in dense_tasks:
             _run_command(
-                "dense_probes",
+                "dense_depth_probes",
                 [
                     py,
                     "scripts/train_all_dense_depth_probes.py",
+                    "--config",
+                    str(config_path),
+                ],
+                force=args.force,
+                dry_run=args.dry_run,
+            )
+        if "dense_probes" in stages and "dense_surface_normal_patches" in dense_tasks:
+            _run_command(
+                "dense_surface_normal_probes",
+                [
+                    py,
+                    "scripts/train_all_dense_surface_normal_probes.py",
                     "--config",
                     str(config_path),
                 ],

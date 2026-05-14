@@ -137,6 +137,11 @@ def aggregate_probe_metrics(
 
 BOOTSTRAP_PREDICTION_COLUMNS = {
     "angular_error_deg": "angular_error_deg_mean",
+    "angular_error_deg_mean": "angular_error_deg_mean",
+    "angular_error_deg_median": "angular_error_deg_median",
+    "within_11_25_deg": "within_11_25_deg",
+    "within_22_5_deg": "within_22_5_deg",
+    "within_30_deg": "within_30_deg",
     "row_valid_pair_accuracy": "valid_pair_accuracy",
     "row_mae": "mae_mean",
     "viewpoint_angular_error_deg": "viewpoint_angular_error_deg_mean",

@@ -59,7 +59,7 @@ models:
   dense_layers: ["final", "layer8"]
 
 tasks:
-  enabled: ["surface_normal_aggregate", "relative_depth_regions"]
+  enabled: ["dense_surface_normal_patches", "relative_depth_regions"]
 
 probe:
   epochs: 20
@@ -72,6 +72,15 @@ probe:
       unit: object_id
       n_resamples: 500
       seed: ${experiment.seed}
+  dense_surface_normal:
+    epochs: 25
+    batch_size: 128
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    use_layernorm: true
+    evaluation:
+      within_texture: true
+      cross_texture: false
   dense_depth:
     epochs: 25
     batch_size: 128

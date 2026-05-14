@@ -11,9 +11,12 @@ from typing import Optional
 import torch
 from omegaconf import OmegaConf
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+_SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SCRIPT_DIR))
+from _repo_root import repo_root  # noqa: E402
+
+PROJECT_ROOT = repo_root(__file__)
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from exp1.config import (
     default_exp1_config_path,

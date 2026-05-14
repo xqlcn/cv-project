@@ -4,7 +4,7 @@ defaults:
 
 experiment:
   name: exp1_under12h_dense
-  description: Bounded dense patch-depth sub-study for sampled Experiment 1.
+  description: Bounded dense patch-depth and patch-normal sub-study for sampled Experiment 1.
 
 paths:
   exp1_root: ${paths.project_root}/data/exp1_under12h_dense
@@ -20,7 +20,7 @@ assets:
 render_plan:
   pose_samples_per_object: 3
   sampled:
-    camera_distance: 2.8
+    camera_distance: 1.9
     camera_distances: null
 
 models:
@@ -36,10 +36,24 @@ features:
 
 tasks:
   enabled:
+    - dense_surface_normal_patches
     - relative_depth_regions
     - dense_depth_patches
 
 probe:
+  dense_surface_normal:
+    task: dense_surface_normal_patches
+    epochs: 20
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    use_layernorm: true
+    scheduler: cosine_warmup
+    warmup_epochs: 2
+    monitor: val_angular_error_deg_mean
+    evaluation:
+      within_texture: true
+      cross_texture: false
   dense_depth:
     task: dense_depth_patches
     epochs: 20

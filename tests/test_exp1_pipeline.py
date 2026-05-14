@@ -174,6 +174,6 @@ def test_estimate_exp1_run_counts_bounded_config() -> None:
     assert estimate["settings_per_object"] == 384
     assert estimate["render_count"] == 19200
     assert estimate["enabled_tasks"] == [
-        "surface_normal_aggregate",
+        "dense_surface_normal_patches",
         "relative_depth_regions",
     ]

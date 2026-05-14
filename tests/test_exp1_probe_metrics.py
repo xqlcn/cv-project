@@ -52,7 +52,7 @@ def test_full_task_metrics_cover_regression_and_viewpoint() -> None:
     assert viewpoint["elevation_angular_error_deg_mean"] == pytest.approx(90.0)
 
 
-def test_surface_normal_probe_overfits_synthetic_linear_labels() -> None:
+def test_lighting_direction_probe_overfits_synthetic_linear_labels() -> None:
     rng = np.random.default_rng(7)
     features = rng.normal(size=(96, 3)).astype(np.float32)
     targets = features / np.linalg.norm(features, axis=1, keepdims=True)
@@ -60,9 +60,9 @@ def test_surface_normal_probe_overfits_synthetic_linear_labels() -> None:
     result = train_probe_arrays(
         features,
         targets,
-        task="surface_normal_aggregate",
+        task="lighting_direction",
         config=ProbeTrainConfig(
-            task="surface_normal_aggregate",
+            task="lighting_direction",
             epochs=120,
             batch_size=24,
             lr=5e-2,
@@ -150,16 +150,12 @@ def test_train_exp1_probe_checks_object_disjoint_splits_before_training(
         [
             {
                 "render_id": "r1",
-                "mean_normal_x": 1.0,
-                "mean_normal_y": 0.0,
-                "mean_normal_z": 0.0,
+                "log_camera_distance": 1.0,
                 "label_valid": True,
             },
             {
                 "render_id": "r2",
-                "mean_normal_x": 0.0,
-                "mean_normal_y": 1.0,
-                "mean_normal_z": 0.0,
+                "log_camera_distance": 2.0,
                 "label_valid": True,
             },
         ]
@@ -187,9 +183,10 @@ def test_train_exp1_probe_checks_object_disjoint_splits_before_training(
             label_path=label_path,
             manifest_path=manifest_path,
             output_dir=tmp_path / "out",
-            task="surface_normal_aggregate",
+            task="camera_distance",
             model_name="toy",
             layer_name="final",
+            target_columns=["log_camera_distance"],
             config=ProbeTrainConfig(epochs=1, device="cpu"),
         )
 
@@ -216,9 +213,9 @@ def test_train_exp1_probe_saves_checkpoint_metrics_and_predictions(tmp_path) -> 
         [
             {
                 "render_id": render_id,
-                "mean_normal_x": float(target[0]),
-                "mean_normal_y": float(target[1]),
-                "mean_normal_z": float(target[2]),
+                "light_dir_x": float(target[0]),
+                "light_dir_y": float(target[1]),
+                "light_dir_z": float(target[2]),
                 "label_valid": True,
             }
             for render_id, target in zip(render_ids, targets)
@@ -241,9 +238,10 @@ def test_train_exp1_probe_saves_checkpoint_metrics_and_predictions(tmp_path) -> 
         label_path=label_path,
         manifest_path=manifest_path,
         output_dir=tmp_path / "out",
-        task="surface_normal_aggregate",
+        task="lighting_direction",
         model_name="toy",
         layer_name="final",
+        target_columns=["light_dir_x", "light_dir_y", "light_dir_z"],
         config=ProbeTrainConfig(
             epochs=5,
             batch_size=2,
@@ -260,7 +258,7 @@ def test_train_exp1_probe_saves_checkpoint_metrics_and_predictions(tmp_path) -> 
         assert path.is_file()
     predictions = pd.read_csv(result["artifact_paths"]["predictions"])
     assert set(predictions["split"]) == {"train", "val", "test"}
-    assert "pred_mean_normal_z" in predictions.columns
+    assert "pred_light_dir_z" in predictions.columns
 
 
 def test_train_exp1_probe_supports_cross_texture_eval_filters(tmp_path) -> None:
@@ -275,9 +273,9 @@ def test_train_exp1_probe_supports_cross_texture_eval_filters(tmp_path) -> None:
         [
             {
                 "render_id": render_id,
-                "mean_normal_x": 1.0,
-                "mean_normal_y": 0.0,
-                "mean_normal_z": 0.0,
+                "light_dir_x": 1.0,
+                "light_dir_y": 0.0,
+                "light_dir_z": 0.0,
                 "label_valid": True,
             }
             for render_id in render_ids
@@ -300,9 +298,10 @@ def test_train_exp1_probe_supports_cross_texture_eval_filters(tmp_path) -> None:
         label_path=label_path,
         manifest_path=manifest_path,
         output_dir=tmp_path / "out",
-        task="surface_normal_aggregate",
+        task="lighting_direction",
         model_name="toy",
         layer_name="final",
+        target_columns=["light_dir_x", "light_dir_y", "light_dir_z"],
         train_texture_condition=["flat"],
         eval_texture_condition=["random_noise"],
         config=ProbeTrainConfig(

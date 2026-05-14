@@ -12,7 +12,7 @@ def surface_normal_loss(
     *,
     kind: str = "cosine",
 ) -> torch.Tensor:
-    """Loss for aggregate surface-normal regression."""
+    """Cosine/MSE loss for unit-vector regression tasks."""
     pred = F.normalize(predictions.float(), dim=-1, eps=1e-8)
     target = F.normalize(targets.float(), dim=-1, eps=1e-8)
     if kind == "cosine":

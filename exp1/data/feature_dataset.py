@@ -62,7 +62,7 @@ class Exp1FeatureDataset:
         labels: Union[RowsLike, str, Path],
         *,
         manifest: Optional[Union[RowsLike, str, Path]] = None,
-        task: str = "surface_normal_aggregate",
+        task: str = "relative_depth_regions",
         target_columns: Optional[Sequence[str]] = None,
         split: Optional[Union[str, list[str]]] = None,
         texture_condition: Optional[Union[str, list[str]]] = None,
@@ -105,7 +105,7 @@ class Exp1FeatureDataset:
             self.target_columns, self.valid_columns = relative_depth_columns(self.rows)
         else:
             if target_columns is None:
-                target_columns = ("mean_normal_x", "mean_normal_y", "mean_normal_z")
+                target_columns = ("target",)
             self.target_columns = list(target_columns)
             self.valid_columns: List[str] = []
 

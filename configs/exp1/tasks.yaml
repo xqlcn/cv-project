@@ -46,14 +46,27 @@ features:
   cache_format: npz
 
 tasks:
-  enabled: ["surface_normal_aggregate", "relative_depth_regions"]
+  enabled: ["dense_surface_normal_patches", "relative_depth_regions"]
   definitions:
-    surface_normal_aggregate:
-      type: regression
-      target_columns: ["mean_normal_x", "mean_normal_y", "mean_normal_z"]
-      label_path: ${paths.labels_dir}/labels_surface_normal_aggregate.parquet
-      metric: angular_error_deg
-      min_valid_pixels: 64
+    dense_surface_normal_patches:
+      type: dense_regression
+      metric: angular_error_deg_mean
+      feature_mode: patch
+      target_mode: camera_frame_normals
+      head: linear_patch
+      patch_target_transform:
+        resize: resize_shortest_edge
+        crop: center
+        interpolation: nearest
+      min_valid_fraction_per_patch: 0.25
+      loss: masked_cosine
+      metrics:
+        - angular_error_deg_mean
+        - angular_error_deg_median
+        - within_11_25_deg
+        - within_22_5_deg
+        - within_30_deg
+        - valid_patch_count_mean
     relative_depth_regions:
       type: multi_label_binary
       label_path: ${paths.labels_dir}/labels_relative_depth_regions.parquet
@@ -155,10 +168,28 @@ probe:
     patience: 8
     min_delta: 0.0
   losses:
-    surface_normal_aggregate: cosine
     relative_depth_regions: bce_with_logits
+    dense_surface_normal_patches: masked_cosine
     dense_depth_patches: ssi_l1
     regression_default: mse
+  dense_surface_normal:
+    task: dense_surface_normal_patches
+    head: linear_patch
+    feature_mode: patch
+    target_mode: camera_frame_normals
+    loss: masked_cosine
+    min_valid_fraction_per_patch: 0.25
+    epochs: 40
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    use_layernorm: true
+    scheduler: cosine_warmup
+    warmup_epochs: 4
+    monitor: val_angular_error_deg_mean
+    evaluation:
+      within_texture: true
+      cross_texture: true
   dense_depth:
     task: dense_depth_patches
     head: linear_patch

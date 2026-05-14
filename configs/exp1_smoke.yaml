@@ -37,13 +37,15 @@ scale_grid:
 models:
   enabled: ["clip_vit_b16"]
   layers: ["final"]
+  dense_enabled: ["clip_vit_b16"]
+  dense_layers: ["final"]
 
 features:
   batch_size: 8
   num_workers: 0
 
 tasks:
-  enabled: ["surface_normal_aggregate"]
+  enabled: ["dense_surface_normal_patches"]
 
 probe:
   epochs: 3
