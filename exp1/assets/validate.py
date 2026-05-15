@@ -182,6 +182,66 @@ def assign_object_disjoint_splits(
     return out.to_dict(orient="records")
 
 
+def assign_category_stratified_object_splits(
+    rows: Union[pd.DataFrame, Iterable[Mapping[str, Any]]],
+    *,
+    fractions: Mapping[str, Any] = DEFAULT_SPLIT_FRACTIONS,
+    labels: Sequence[str] = ("train", "val", "test"),
+    seed: int = 0,
+) -> list[dict[str, Any]]:
+    """Assign deterministic object-disjoint splits independently per category.
+
+    This preserves category balance in train/val/test while keeping every
+    ``object_id`` in exactly one split. With 60 objects per category and the
+    default 70/15/15 fractions, each category receives 42/9/9 objects.
+    """
+    df = _as_dataframe(rows)
+    missing = _missing_columns(df, ("object_id", "source_dataset", "category"))
+    if missing:
+        raise AssetValidationError(
+            "Missing split assignment columns: " + ", ".join(missing)
+        )
+
+    labels = [str(label) for label in labels]
+    invalid_labels = sorted(set(labels) - VALID_SPLITS)
+    if invalid_labels:
+        raise AssetValidationError(f"Invalid split labels: {invalid_labels}")
+
+    object_rows = (
+        df.loc[:, ["object_id", "source_dataset", "category"]]
+        .drop_duplicates(subset=["object_id"])
+        .to_dict(orient="records")
+    )
+    assignments: dict[str, str] = {}
+    for category in sorted({str(row["category"]) for row in object_rows}):
+        category_rows = [
+            row for row in object_rows if str(row["category"]) == category
+        ]
+        category_rows = sorted(
+            category_rows,
+            key=lambda row: _stable_object_key(row, seed=int(seed)),
+        )
+        counts = _split_counts(
+            len(category_rows),
+            labels=labels,
+            fractions=fractions,
+        )
+        cursor = 0
+        for label, count in zip(labels, counts):
+            for row in category_rows[cursor : cursor + count]:
+                assignments[str(row["object_id"])] = label
+            cursor += count
+
+    out = df.copy()
+    if "split" in out.columns:
+        out["split_original"] = out["split"].astype(str)
+    out["split"] = out["object_id"].astype(str).map(assignments)
+    out["split_assignment_method"] = "category_stratified_fraction"
+    out["split_assignment_seed"] = int(seed)
+    assert_object_disjoint_splits(out)
+    return out.to_dict(orient="records")
+
+
 def validate_asset_manifest(
     rows: Union[pd.DataFrame, Iterable[Mapping[str, Any]]],
     *,

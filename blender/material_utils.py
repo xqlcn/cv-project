@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import struct
 import zlib
@@ -149,6 +150,93 @@ def _set_input(node: bpy.types.Node, name: str, value) -> None:
         node.inputs[name].default_value = value
 
 
+def _build_procedural_noise_shader(
+    *,
+    nodes: Any,
+    links: Any,
+    principled: bpy.types.Node,
+    seed: int,
+    scale_range: tuple,
+    detail: float,
+    mapping_mode: str,
+) -> None:
+    """Build a colorful, high-contrast procedural RGB noise shader.
+
+    Uses three independent noise textures (one per RGB channel), each routed
+    through a Mapping node with a unique per-seed offset/rotation, then
+    contrast-expanded so the channel covers most of [0, 1]. This avoids the
+    "flat muddy color" pathology that occurs when a single noise Fac is
+    routed through a 2-stop random-color ramp (the two stops often end up
+    in the same color region, producing a near-uniform surface).
+    """
+    rng = random.Random(int(seed))
+    low, high = [float(v) for v in scale_range]
+    if high < low:
+        low, high = high, low
+    base_scale = low + rng.random() * max(high - low, 0.0)
+    if base_scale <= 0.0:
+        base_scale = max(low, 1.0)
+
+    coord = nodes.new(type="ShaderNodeTexCoord")
+    mode = str(mapping_mode).strip().lower()
+    if mode == "uv":
+        vector_output = "UV"
+    elif mode == "generated":
+        vector_output = "Generated"
+    else:
+        vector_output = "Object"
+
+    channel_values = []
+    for _ in range(3):
+        mapping = nodes.new(type="ShaderNodeMapping")
+        mapping.inputs["Location"].default_value = (
+            rng.uniform(-200.0, 200.0),
+            rng.uniform(-200.0, 200.0),
+            rng.uniform(-200.0, 200.0),
+        )
+        mapping.inputs["Rotation"].default_value = (
+            rng.uniform(-math.pi, math.pi),
+            rng.uniform(-math.pi, math.pi),
+            rng.uniform(-math.pi, math.pi),
+        )
+        links.new(coord.outputs[vector_output], mapping.inputs["Vector"])
+
+        noise = nodes.new(type="ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = base_scale * (0.7 + rng.random() * 0.6)
+        noise.inputs["Detail"].default_value = float(detail)
+        if "Roughness" in noise.inputs:
+            noise.inputs["Roughness"].default_value = 0.45 + rng.random() * 0.45
+        if "Distortion" in noise.inputs:
+            noise.inputs["Distortion"].default_value = 0.4 + rng.random() * 1.4
+        links.new(mapping.outputs["Vector"], noise.inputs["Vector"])
+
+        # Contrast-expand the Fac (centred around ~0.5 for Perlin noise) so the
+        # channel actually spans most of [0, 1].
+        sub = nodes.new(type="ShaderNodeMath")
+        sub.operation = "SUBTRACT"
+        sub.inputs[1].default_value = 0.5
+        links.new(noise.outputs["Fac"], sub.inputs[0])
+
+        mul = nodes.new(type="ShaderNodeMath")
+        mul.operation = "MULTIPLY"
+        mul.inputs[1].default_value = 3.0
+        links.new(sub.outputs["Value"], mul.inputs[0])
+
+        add = nodes.new(type="ShaderNodeMath")
+        add.operation = "ADD"
+        add.inputs[1].default_value = 0.5
+        add.use_clamp = True
+        links.new(mul.outputs["Value"], add.inputs[0])
+
+        channel_values.append(add)
+
+    combine = nodes.new(type="ShaderNodeCombineXYZ")
+    links.new(channel_values[0].outputs["Value"], combine.inputs["X"])
+    links.new(channel_values[1].outputs["Value"], combine.inputs["Y"])
+    links.new(channel_values[2].outputs["Value"], combine.inputs["Z"])
+    links.new(combine.outputs["Vector"], principled.inputs["Base Color"])
+
+
 def assign_principled_material(
     obj: bpy.types.Object,
     *,
@@ -158,6 +246,7 @@ def assign_principled_material(
     roughness: float = 0.55,
     noise_scale_range: tuple = (8.0, 20.0),
     noise_detail: float = 6.0,
+    noise_mapping: str = "object",
     image_texture_path: Optional[str] = None,
     image_size: tuple = (256, 256),
     image_color_space: str = "sRGB",
@@ -203,43 +292,27 @@ def assign_principled_material(
             tex.image = image
             tex.extension = "REPEAT"
             coord = nodes.new(type="ShaderNodeTexCoord")
-            vector_output = (
-                "UV" if getattr(obj.data, "uv_layers", None) else "Generated"
-            )
+            mapping_mode = str(noise_mapping).strip().lower()
+            if mapping_mode == "uv":
+                vector_output = (
+                    "UV" if getattr(obj.data, "uv_layers", None) else "Generated"
+                )
+            elif mapping_mode == "generated":
+                vector_output = "Generated"
+            else:
+                vector_output = "Object"
             links.new(coord.outputs[vector_output], tex.inputs["Vector"])
             links.new(tex.outputs["Color"], principled.inputs["Base Color"])
         else:
-            rng = random.Random(seed)
-            tex = nodes.new(type="ShaderNodeTexNoise")
-            low, high = [float(v) for v in noise_scale_range]
-            tex.inputs["Scale"].default_value = low + rng.random() * (high - low)
-            tex.inputs["Detail"].default_value = float(noise_detail)
-            if "Roughness" in tex.inputs:
-                tex.inputs["Roughness"].default_value = 0.5 + rng.random() * 0.35
-            if "Distortion" in tex.inputs:
-                tex.inputs["Distortion"].default_value = rng.random() * 2.0
-            mapping = nodes.new(type="ShaderNodeMapping")
-            coord = nodes.new(type="ShaderNodeTexCoord")
-            links.new(coord.outputs["Object"], mapping.inputs["Vector"])
-            links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
-
-            ramp = nodes.new(type="ShaderNodeValToRGB")
-            ramp.color_ramp.elements[0].position = 0.15 + rng.random() * 0.25
-            ramp.color_ramp.elements[0].color = (
-                rng.random(),
-                rng.random(),
-                rng.random(),
-                1.0,
+            _build_procedural_noise_shader(
+                nodes=nodes,
+                links=links,
+                principled=principled,
+                seed=int(seed),
+                scale_range=tuple(noise_scale_range),
+                detail=float(noise_detail),
+                mapping_mode=str(noise_mapping),
             )
-            ramp.color_ramp.elements[1].position = 0.65 + rng.random() * 0.25
-            ramp.color_ramp.elements[1].color = (
-                rng.random(),
-                rng.random(),
-                rng.random(),
-                1.0,
-            )
-            links.new(tex.outputs["Fac"], ramp.inputs["Fac"])
-            links.new(ramp.outputs["Color"], principled.inputs["Base Color"])
         _set_input(principled, "Roughness", float(roughness))
     else:
         raise ValueError(f"Unknown texture_type: {texture_type}")

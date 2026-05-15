@@ -80,7 +80,7 @@ def test_exp1_smoke_config_stays_tiny() -> None:
     assert cfg.assets.max_objects == 3
     assert list(cfg.models.enabled) == ["clip_vit_b16"]
     assert list(cfg.models.layers) == ["final"]
-    assert list(cfg.tasks.enabled) == ["surface_normal_aggregate"]
+    assert list(cfg.tasks.enabled) == ["dense_surface_normal_patches"]
     assert max(int(x) for x in cfg.render.resolution) <= 128
 
 
@@ -88,7 +88,7 @@ def test_exp1_bounded_config_focuses_depth_and_normals() -> None:
     cfg = _compose_with_omegaconf("exp1_bounded")
 
     assert list(cfg.tasks.enabled) == [
-        "surface_normal_aggregate",
+        "dense_surface_normal_patches",
         "relative_depth_regions",
     ]
     assert cfg.assets.max_objects == 50
@@ -112,7 +112,7 @@ def test_exp1_default_sources_are_shapenetcore_and_objaverse() -> None:
     cfg = _compose_with_omegaconf("exp1_smoke")
     sources = {str(source.name): source for source in cfg.assets.sources}
 
-    assert sources["modelnet40"].enabled is False
+    assert "modelnet40" not in sources
     assert sources["synthetic_primitives"].enabled is False
     assert sources["objaverse_manifest"].enabled is True
     assert sources["objaverse"].enabled is True
@@ -126,7 +126,10 @@ def test_exp1_full_probe_tasks_have_label_paths() -> None:
     cfg = _compose_with_omegaconf("exp1_full")
 
     for task in cfg.tasks.enabled:
-        assert cfg.tasks.definitions[task].get("label_path") is not None
+        task_cfg = cfg.tasks.definitions[task]
+        if task_cfg.get("type") == "dense_regression":
+            continue
+        assert task_cfg.get("label_path") is not None
 
 
 @pytest.mark.parametrize("config_name", CONFIG_NAMES)

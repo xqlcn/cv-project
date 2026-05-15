@@ -30,6 +30,9 @@ datasets:
   shapenet:
     # Keep this bounded by default; set EXP1_SHAPENET_DOWNLOAD=true only after
     # accepting the dataset license and confirming local storage.
+    repo_id: ShapeNet/ShapeNetCore
+    local_dir: ${paths.shapenet_hf_root}
+    extract_archives: true
     download: false
     categories: ["airplane", "bench", "bottle", "car", "chair", "lamp", "sofa", "table"]
     max_objects: 500
@@ -58,23 +61,18 @@ assets:
       raw_mesh_path_key: mesh_path
       normalized_mesh_path_key: mesh_path
       enabled: false
-    - name: modelnet40
-      type: modelnet40
-      root: ${paths.project_root}/data/modelnet40
-      source_dataset: modelnet40
-      enabled: false
     - name: shapenet_hf
       type: huggingface_shapenet
-      repo_id: ShapeNet/ShapeNetCore
-      local_dir: ${paths.shapenet_hf_root}
+      repo_id: ${datasets.shapenet.repo_id}
+      local_dir: ${datasets.shapenet.local_dir}
       revision: null
-      token: true
+      token: null
       download: ${datasets.shapenet.download}
       categories: ${datasets.shapenet.categories}
       max_objects: ${datasets.shapenet.max_objects}
       allow_patterns: null
       ignore_patterns: ["*.md", "*.txt"]
-      extract_archives: true
+      extract_archives: ${datasets.shapenet.extract_archives}
       extracted_dir: ${paths.shapenet_hf_extracted_root}
       overwrite_extract: false
       source_dataset: shapenet

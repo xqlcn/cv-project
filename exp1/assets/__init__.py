@@ -3,7 +3,6 @@
 from exp1.assets.discover import (
     ALLOWED_MESH_EXTENSIONS,
     discover_assets_from_directory,
-    discover_modelnet40_assets,
     load_assets_from_manifest,
     standardize_asset_record,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "bytes_from_gb",
     "discover_assets_from_directory",
     "discover_huggingface_shapenet_assets",
-    "discover_modelnet40_assets",
     "download_objaverse_assets",
     "extract_shapenet_archives",
     "load_assets_from_manifest",

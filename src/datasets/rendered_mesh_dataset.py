@@ -1,5 +1,5 @@
 """
-Wrap mesh **records** (ModelNet, synthetic, future ShapeNet) with multi-view rendering.
+Wrap mesh **records** (synthetic, ShapeNet, Objaverse, ...) with multi-view rendering.
 
 Each **record** must contain: mesh_path, category, split, object_id, dataset (optional).
 """

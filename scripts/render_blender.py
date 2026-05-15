@@ -628,6 +628,23 @@ def _write_status(path: Optional[Path], rows: Iterable[Mapping[str, Any]]) -> No
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _initialize_status(path: Optional[Path]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+
+
+def _append_status(path: Optional[Path], row: Mapping[str, Any]) -> None:
+    line = json.dumps(dict(row))
+    if path is None:
+        print(line)
+        return
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line)
+        f.write("\n")
+
+
 def main() -> None:
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
     args = _parse_args(argv)
@@ -640,30 +657,33 @@ def main() -> None:
         rows = rows[: int(args.limit)]
     fail_fast = bool(args.fail_fast or cfg.get("render", {}).get("fail_fast", False))
 
-    status_rows: List[Dict[str, Any]] = []
+    status_output = _default_status_output(args, project_root)
+    _initialize_status(status_output)
+    rendered_count = 0
     for idx, record in enumerate(rows):
         render_id = record.get("render_id", f"row_{idx}")
         print(f"[{idx + 1}/{len(rows)}] Rendering {render_id}")
         try:
-            status_rows.append(
-                render_record(record, cfg=cfg, project_root=project_root)
-            )
-        except Exception as exc:
-            failure = _failure_row(record, exc)
-            status_rows.append(failure)
-            print(f"FAILED {render_id}: {failure['qc_error_message']}", file=sys.stderr)
-            if fail_fast:
-                _write_status(_default_status_output(args, project_root), status_rows)
-                raise
+            try:
+                status_row = render_record(record, cfg=cfg, project_root=project_root)
+            except Exception as exc:
+                status_row = _failure_row(record, exc)
+                print(
+                    f"FAILED {render_id}: {status_row['qc_error_message']}",
+                    file=sys.stderr,
+                )
+                if fail_fast:
+                    _append_status(status_output, status_row)
+                    raise
+            _append_status(status_output, status_row)
+            rendered_count += 1
         finally:
             from mesh_utils import clear_meshes
 
             clear_meshes()
 
-    status_output = _default_status_output(args, project_root)
-    _write_status(status_output, status_rows)
     if status_output is not None:
-        print(f"Wrote render status rows to {status_output}")
+        print(f"Wrote {rendered_count} render status rows to {status_output}")
 
 
 if __name__ == "__main__":

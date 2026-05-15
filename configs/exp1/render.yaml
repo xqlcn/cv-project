@@ -10,6 +10,7 @@ render:
   file_format: PNG
   fail_fast: false
   chunk_size: 128
+  parallel_workers: 1
   output_contract:
     rgb_filename: rgb.png
     depth_filename: depth.npy
@@ -29,6 +30,10 @@ render:
     normal_norm_tolerance: 0.1
     depth_atol: 0.0001
     normal_atol: 0.0001
+    min_random_noise_rgb_std: 0.02
+    fail_low_random_noise_variation: false
+    fail_random_noise_image_texture: false
+    fail_material_override_mismatch: false
 
 textures:
   conditions: ["photorealistic", "flat", "random_noise"]
@@ -48,12 +53,14 @@ textures:
     texture_size: [256, 256]
     color_space: sRGB
     category_correlated: false
+    mapping: object
+    node_type: procedural_noise
     scale_range: [8.0, 20.0]
     detail: 6.0
     roughness: 0.55
 
 camera_grid:
-  distances: [2.4]
+  distances: [1.8]
   azimuths_deg: [0.0, 90.0, 180.0, 270.0]
   elevations_deg: [20.0]
   fov_deg: ${render.camera.fov_deg}
@@ -69,10 +76,21 @@ scale_grid:
   values: [1.0]
 
 render_plan:
+  mode: grid
+  pose_samples_per_object: null
   id_version: v1
   seed: ${experiment.seed}
   include_failed_rows: true
   preserve_split_labels: false
+  sampled:
+    camera_distance: 1.9
+    camera_distances: null
+    azimuth_range_deg: [0.0, 360.0]
+    elevation_range_deg: [10.0, 35.0]
+    light_azimuth_range_deg: [0.0, 360.0]
+    light_elevation_range_deg: [20.0, 60.0]
+    light_intensity_range: [2.0, 4.5]
+    object_scale_range: [0.9, 1.05]
   texture_control_fields:
     - object_id
     - camera_distance

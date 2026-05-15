@@ -1,275 +1,235 @@
-# Controlled 3D geometry probing (CLIP & DINOv2)
+# Experiment 1: Textureless Geometry and Rendering Probes
 
-This repo supports **frozen** CLIP / DINOv2 features + **linear probes**, plus two mesh pipelines:
+This repository implements the controlled 3D-geometry probing experiment
+described in `AGENTS.md` (kept locally, not version-controlled). It renders
+the same ShapeNet/Objaverse objects in Blender under matched conditions
+while varying texture, camera, lighting, and scale; trains frozen-feature
+linear probes on CLIP and DINOv2 representations; and aggregates results
+into the two canonical analysis artifacts:
 
-1. **Experiment 1 controlled pipeline:** ShapeNetCore/Objaverse meshes → Blender texture controls → **RGB**, **depth**, **normal**, and **mask** buffers.
-2. **Smoke fixtures:** synthetic primitives for tiny local pipeline checks.
+- `outputs/exp1_rerender_analysis_figures/` — aggregate figures, summary
+  CSVs, qualitative grids, and state-space plots that compare textures,
+  models, layers, and tasks.
+- `outputs/exp1_dense_probe_analysis/` — the standalone dense-probe
+  report (`analysis.md`, `metrics_summary.csv`, figures, predictions).
 
-An optional **Blender** path (`blender/render_dataset.py`) remains for high-quality chirality renders using a JSON manifest (no ShapeNet dependency).
+> The repo is heavily I/O-driven: every stage reads/writes Hydra-resolved
+> paths derived from a single config. Two configs drive the canonical
+> pipeline: `configs/exp1_main.yaml` (global CLS probes) and
+> `configs/exp1_dense.yaml` (dense patch-grid sub-study).
 
-## Layout
+## Repository Layout
 
-- `src/datasets/` — ModelNet40 index, synthetic cache, rendered `Dataset` wrappers
-- `src/rendering/` — multi-view pyrender backend (RGB / depth / normals)
-- `blender/` — headless Blender chirality pipeline + manifest
-- `configs/` — YAML / Hydra
-- `data/shapenet_hf/` — optional local ShapeNetCore snapshots/extractions
-- `data/objaverse/` and `data/objaverse_cache/` — optional local Objaverse assets/cache
-- `data/synthetic_primitives/` — generated `.obj` primitives + `catalog.json`
+```
+configs/                Hydra configs (see Configurations below)
+docs/codex/             Engineering runbooks and design notes
+exp1/                   Library code: assets, manifests, tasks, probes
+scripts/                Command-line entry points (pipeline + analysis)
+notebooks/              Colab notebooks for feature extraction and probes
+tests/                  pytest suite for manifests, configs, metrics, etc.
+blender/                Blender-only helpers (rendering, materials, etc.)
+data/                   Generated renders, manifests, features (gitignored)
+outputs/                Probe checkpoints, results, figures (gitignored)
+```
 
-## Setup (Python)
+## Configurations
+
+| Config | Purpose |
+|---|---|
+| `configs/exp1_smoke.yaml` | Five-minute synthetic-asset smoke test. |
+| `configs/exp1_mvp.yaml` | Small MVP run with a few real objects. |
+| `configs/exp1_bounded.yaml` | Mid-size scaling step toward the full run. |
+| `configs/exp1_full.yaml` | Largest-scale reference plan (research-only). |
+| `configs/exp1_main.yaml` | **Canonical** main benchmark for the rerender analysis. |
+| `configs/exp1_dense.yaml` | **Canonical** dense patch-depth/normal sub-study (inherits from `exp1_main`). |
+
+`configs/exp1/{paths,render,tasks}.yaml` are shared building blocks
+selected via Hydra `defaults`.
+
+## Canonical Pipeline
+
+The pipeline reproduces both `outputs/exp1_rerender_analysis_figures/` and
+`outputs/exp1_dense_probe_analysis/`.
+
+### 0. Environment
 
 ```bash
-cd "/path/to/CV final project"
 python -m venv .venv
-source .venv/bin/activate
+. .venv/bin/activate
 pip install -r requirements.txt
-# PyTorch: pick the wheel that matches your machine from https://pytorch.org
-export PYTHONPATH="$PWD"
-export CV_PROJECT_ROOT="$PWD"
 ```
 
-**`pyrender` / `PyOpenGL`:** `requirements.txt` installs **pyrender from GitHub** (not PyPI 0.1.45) so pip can resolve **`PyOpenGL>=3.1.7`** (PyPI pyrender wrongly pins `3.1.0`, which breaks Python 3.7+). You need **`git`** on your PATH for that line.
-
-If you cannot use `git+https`, install PyPI pyrender without pulling its OpenGL pin, then upgrade OpenGL:
+ShapeNet is gated. Authenticate with the Hugging Face CLI (so a token is
+not stored in this repo):
 
 ```bash
-pip install "pyrender==0.1.45" --no-deps
-pip install "PyOpenGL>=3.1.7,<3.2"
-pip install trimesh networkx scipy pyglet "Pillow>=10" imageio freetype-py six
+HF_HOME=$PWD/data/hf_cache .venv/bin/python -m huggingface_hub.commands.huggingface_cli login
 ```
 
-**Headless rendering:** on Linux servers you may need `export PYOPENGL_PLATFORM=osmesa` (and OSMesa installed) or EGL; on macOS the default often works for offscreen pyrender.
-
-## 1) Legacy ModelNet40 download
-
-ModelNet40 is kept only for legacy validation utilities. It is not the default
-Experiment 1 source because `.off` meshes do not provide photorealistic texture
-controls.
-
-Automatic (may fail if the server blocks bots; then use manual steps printed by the script):
-
-```bash
-python scripts/download_modelnet40.py
-```
-
-Manual fallback:
-
-1. Open [https://modelnet.cs.princeton.edu/](https://modelnet.cs.princeton.edu/) and download **ModelNet40.zip**.
-2. Unzip so you have `data/modelnet40/train/<category>/*.off` and `data/modelnet40/test/<category>/*.off`.
-
-Optional Blender manifest from the same tree:
-
-```bash
-python scripts/prepare_modelnet_manifest.py \
-  --modelnet-root data/modelnet40 \
-  --output data/metadata/modelnet40_manifest.json
-```
-
-## 2) Synthetic primitives (default experiment)
-
-```bash
-python scripts/setup_synthetic_primitives.py
-```
-
-Creates `data/synthetic_primitives/train/*.obj`, `val/*.obj`, and `catalog.json`.
-
-## 2b) ShapeNetCore from Hugging Face
-
-After your Hugging Face account has access to the gated
-`ShapeNet/ShapeNetCore` repository, log in locally and preprocess a small
-category subset first:
-
-```bash
-huggingface-cli login
-python scripts/preprocess_assets.py \
-  --config configs/exp1_mvp.yaml \
-  --shapenet-hf-repo-id ShapeNet/ShapeNetCore \
-  --shapenet-hf-local-dir data/shapenet_hf/ShapeNetCore \
-  --shapenet-category chair \
-  --shapenet-category table \
-  --max-objects 50 \
-  --overwrite
-```
-
-`ShapeNet/ShapeNetCore` is stored as per-category synset ZIPs; preprocessing
-downloads only the requested category ZIPs when `--shapenet-category` is set,
-extracts them into `data/shapenet_hf/extracted/`, and normalizes the meshes.
-This writes the normal Experiment 1 asset manifests under `data/exp1/manifests/`
-and normalized GLBs under `data/exp1/normalized_assets/`, so downstream render
-planning can keep using:
-
-```bash
-python scripts/create_render_plan.py \
-  --config configs/exp1_mvp.yaml \
-  --asset-manifest data/exp1/manifests/assets_normalized.jsonl
-```
-
-Once you have access to the GLB mirror, use the same command with
-`--shapenet-hf-repo-id ShapeNet/shapenetcore-glb` and a separate local dir such
-as `data/shapenet_hf/shapenetcore-glb`.
-Use `--shapenet-no-download` with `--shapenet-hf-local-dir` to scan an existing
-snapshot without contacting Hugging Face.
-
-## 2c) Objaverse Bounded Download
-
-Objaverse access is optional and bounded by config defaults in
-`configs/exp1/paths.yaml` (`datasets.objaverse.max_objects` and
-`datasets.objaverse.max_download_gb`). The downloader writes a normal asset
-manifest that `scripts/preprocess_assets.py` can consume alongside ShapeNet:
-
-```bash
-python scripts/download_objaverse_assets.py \
-  --config configs/exp1_mvp.yaml \
-  --category chair \
-  --category table \
-  --max-objects 50 \
-  --max-download-gb 5
-```
-
-Then prepare a render plan from configured ShapeNet/Objaverse sources without
-running Blender:
-
-```bash
-make exp1-mvp-plan
-```
-
-## 2d) Bounded Depth/Normal Run
-
-Use `configs/exp1_bounded.yaml` as the next non-toy scale-up config. It keeps
-the core geometry probes only:
-
-- `surface_normal_aggregate`;
-- `relative_depth_regions`.
-
-Before rendering, estimate the render count and storage:
-
-```bash
-make exp1-bounded-estimate
-```
-
-Prepare assets and render chunks without launching Blender:
-
-```bash
-make exp1-bounded-plan
-```
-
-Then render and finish the pipeline:
-
-```bash
-BLENDER_BIN="/Applications/Blender.app/Contents/MacOS/Blender" \
-  bash data/exp1_bounded/manifests/render_chunks/run_blender_chunks.sh
-
-HF_HOME=data/hf_cache PYTHONPATH=. python scripts/run_exp1_pipeline.py \
-  --config configs/exp1_bounded.yaml \
-  --stages post_render ml
-```
-
-## 2e) Experiment 1 smoke pipeline
-
-The safe smoke command prepares a tiny synthetic asset catalog, writes an
-Experiment 1 render plan, exports JSONL render chunks, and creates a Blender
-shell script. Stages are idempotent; rerunning the command skips outputs that
-already exist unless `--force` is passed.
-
-```bash
-make exp1-smoke
-```
-
-Render the prepared chunks with Blender:
-
-```bash
-bash data/exp1/manifests/render_chunks/run_blender_chunks.sh
-```
-
-After Blender finishes, build QC, labels, features, probes, aggregated results,
-and figures:
-
-```bash
-make exp1-smoke-post
-```
-
-Equivalent direct runner commands:
+### 1. Prepare assets, splits, manifests, render plan
 
 ```bash
 PYTHONPATH=. python scripts/run_exp1_pipeline.py \
-  --config configs/exp1_smoke.yaml \
-  --stages smoke_prepare
+  --config configs/exp1_main.yaml --stages prepare
 
 PYTHONPATH=. python scripts/run_exp1_pipeline.py \
-  --config configs/exp1_smoke.yaml \
-  --stages post_render ml
+  --config configs/exp1_dense.yaml --stages prepare
 ```
 
-Standalone reporting commands:
+Each produces:
+
+- `data/exp1_main/manifests/...` (or `data/exp1_dense/...`)
+- `data/<run>/normalized_assets/...`
+- Blender chunk command files under `data/<run>/manifests/render_chunks/`
+
+### 2. Render with Blender (local)
 
 ```bash
-PYTHONPATH=. python scripts/aggregate_exp1_results.py --config configs/exp1_smoke.yaml
-PYTHONPATH=. python scripts/make_exp1_figures.py --config configs/exp1_smoke.yaml
+BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender \
+RENDER_JOBS=4 \
+bash data/exp1_main/manifests/render_chunks/run_blender_chunks.sh
+
+BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender \
+RENDER_JOBS=4 \
+bash data/exp1_dense/manifests/render_chunks/run_blender_chunks.sh
 ```
 
-## 3) Rendered sample schema (ModelNet + synthetic + future corpora)
-
-Each **rendered** training sample is a flat dict (one **view** per row when `flatten_views=True`):
-
-```python
-{
-    "mesh_path": str,
-    "category": str,
-    "split": str,
-    "view_id": int,
-    "object_id": str,
-    "dataset": str,  # "modelnet40" | "synthetic_primitives" | ...
-    "rgb": np.uint8[H, W, 3],
-    "depth": np.float32[H, W],   # linear depth in meters (inf = background)
-    "normal": np.float32[H, W, 3],  # camera-space normals in [-1, 1]
-}
-```
-
-**PyTorch datasets**
-
-- `RenderedSyntheticPrimitiveDataset` — default controlled renders.
-- `RenderedModelNetDataset` — ModelNet40 validation / training renders.
-- `RenderedMeshDataset` — generic wrapper over any list of records with the same keys (e.g. future ShapeNet rows with `mesh_path` + `category` + `split`).
-
-Example:
-
-```python
-from src.rendering.mesh_renderer import RenderConfig
-from src.datasets import RenderedSyntheticPrimitiveDataset
-
-ds = RenderedSyntheticPrimitiveDataset(
-    split="train",
-    render_cfg=RenderConfig(image_size=(224, 224), n_views=8, seed=0),
-)
-sample = ds[0]  # keys: mesh_path, category, split, view_id, rgb, depth, normal, ...
-```
-
-**PyTorch3D:** not required. The active backend is **trimesh + pyrender** (`src/rendering/mesh_renderer.py`). Optional PyTorch3D hook lives in `src/rendering/pytorch3d_backend.py` (stub for you to implement if you install `pytorch3d`).
-
-## Blender (optional) chirality pipeline
-
-1. Install Blender 3.6+.
-2. Install **PyYAML** into Blender’s Python (see previous README sections).
-3. Point `configs/render_config.yaml` → `paths.mesh_manifest` at `data/metadata/modelnet40_manifest.json`.
-4. Run `./scripts/render_chirality_dataset.sh`.
-
-## Feature extraction & probes (unchanged)
+Progress can be monitored with:
 
 ```bash
-./scripts/extract_clip_features.sh
-./scripts/extract_dino_features.sh
-./scripts/train_clip_probe.sh
-./scripts/train_dino_probe.sh
+PYTHONPATH=. python scripts/track_render_chunks.py \
+  --config configs/exp1_main.yaml --watch 10 --verify-rgb
 ```
 
-## Hydra
+### 3. Post-render: QC, labels, splits, contact sheets
 
 ```bash
-python -m src.training.train_probe --config-name=clip_probe probe.epochs=5
+PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_main.yaml --stages post_render
+
+PYTHONPATH=. python scripts/run_exp1_pipeline.py \
+  --config configs/exp1_dense.yaml --stages post_render
 ```
 
-## Licenses
+### 4. Frozen feature extraction (Colab recommended)
 
-- **ModelNet** (Princeton) — follow their terms for redistribution and citation.
-- **CLIP**, **DINOv2**, **OpenCLIP** — respect each model license in publications.
+Open `notebooks/colab_exp1_zip_feature_extraction.ipynb` and run it
+top-to-bottom. The notebook:
+
+1. Zips the repo and uploads it (or pulls from Drive).
+2. Builds Colab-relative manifest copies.
+3. Calls `scripts/extract_exp1_features.py` (global/CLS features) against
+   `configs/exp1_main.yaml`.
+4. Calls `scripts/extract_exp1_patch_features.py` (patch grids + CLS)
+   against `configs/exp1_dense.yaml`.
+5. Syncs `data/exp1_main/features/` and `data/exp1_dense/features/` back
+   to Drive.
+
+The same `extract_*` scripts can be invoked locally with a CUDA-capable
+machine; see the notebook cells for the exact CLI.
+
+### 5. Probe training
+
+Two Colab notebooks cover probe training:
+
+- `notebooks/colab_exp1_zip_probe_training.ipynb` — main + dense in a
+  single zip-based run. Calls:
+  - `scripts/train_all_exp1_probes.py --config configs/exp1_main.yaml`
+  - `scripts/train_all_dense_depth_probes.py --config configs/exp1_dense.yaml`
+  - `scripts/train_all_dense_surface_normal_probes.py --config configs/exp1_dense.yaml`
+  - `scripts/aggregate_exp1_results.py` and `scripts/make_exp1_figures.py`
+    for both configs.
+- `notebooks/colab_exp1_zip_probe_training_wandb.ipynb` — dense-only run
+  with WandB logging (used to produce the dense report). Logs per-probe
+  metrics to `<entity>/<project>` and mirrors aggregated results.
+
+Both write to `outputs/exp1_main/` and/or `outputs/exp1_dense/`.
+
+### 6. Aggregate and plot (local)
+
+```bash
+PYTHONPATH=. python scripts/aggregate_exp1_results.py --config configs/exp1_main.yaml
+PYTHONPATH=. python scripts/aggregate_exp1_results.py --config configs/exp1_dense.yaml
+PYTHONPATH=. python scripts/make_exp1_figures.py --config configs/exp1_main.yaml
+PYTHONPATH=. python scripts/make_exp1_figures.py --config configs/exp1_dense.yaml
+```
+
+### 7. Final analysis artifacts
+
+```bash
+PYTHONPATH=. python scripts/analysis/plot_exp1_rerender_summary.py \
+  --main-dir  outputs/exp1_main \
+  --dense-dir outputs/exp1_dense
+
+PYTHONPATH=. python scripts/analysis/plot_exp1_dense_reliability.py \
+  --dense-dir outputs/exp1_dense
+
+PYTHONPATH=. python scripts/analysis/plot_exp1_state_space_breakdown.py \
+  --main-dir  outputs/exp1_main \
+  --dense-dir outputs/exp1_dense
+
+PYTHONPATH=. python scripts/analysis/plot_exp1_qualitative_examples.py \
+  --dense-dir outputs/exp1_dense
+
+PYTHONPATH=. python scripts/analyze_exp1_dense_probes.py
+```
+
+These commands produce:
+
+- `outputs/exp1_rerender_analysis_figures/` — figures, CSV tables,
+  qualitative grids.
+- `outputs/exp1_dense_probe_analysis/` — `analysis.md` plus supporting
+  figures and CSVs.
+
+A convenience Make target wraps the same calls:
+
+```bash
+make exp1-rerender-analysis
+```
+
+## Make Targets
+
+| Target | What it does |
+|---|---|
+| `make exp1-smoke` | Smoke pipeline prepare stage. |
+| `make exp1-smoke-post` | Smoke pipeline post-render + ML stages. |
+| `make exp1-bounded-plan` | Bounded-scale render plan only. |
+| `make exp1-mvp-plan` | MVP-scale render plan only. |
+| `make exp1-full-plan` | Full-scale render plan only. |
+| `make exp1-main-prepare` | Canonical main prepare stage. |
+| `make exp1-main-post` | Canonical main post-render stage. |
+| `make exp1-dense-prepare` | Canonical dense prepare stage. |
+| `make exp1-dense-post` | Canonical dense post-render stage. |
+| `make exp1-results` | Aggregate both main and dense results. |
+| `make exp1-figures` | Make per-config figures (main + dense). |
+| `make exp1-rerender-analysis` | Run the five analysis scripts that build the final figures and the dense report. |
+
+## Tests
+
+```bash
+pytest -q
+```
+
+`pytest` covers manifest schema, config compose checks (smoke / MVP /
+bounded / full), label generation, probe metrics, and the rendering QC
+helpers that do not require a Blender install.
+
+## Key Source Modules
+
+- `exp1/data/feature_dataset.py` — cached feature loaders for both global
+  and patch caches.
+- `exp1/tasks/` — per-task label builders (normals aggregate + dense,
+  relative depth, viewpoint, lighting, scale).
+- `exp1/probes/train.py` and `exp1/probes/train_dense_surface_normals.py`
+  — linear probe heads and training loops.
+- `exp1/evaluation/metrics.py` — bootstrap CI helpers used by all
+  aggregators.
+- `exp1/rendering/` — pure-Python helpers shared with Blender scripts.
+- `scripts/run_exp1_pipeline.py` — top-level Hydra driver that wires the
+  stages together.
+
+## Local-Only Project Docs
+
+`AGENTS.md`, `EXPERIMENT1_HANDOFF.md`, and `EXPERIMENT1_TASKS.md` are kept
+on disk for reference but are **not** version-controlled. They are listed
+in `.gitignore`.

@@ -99,7 +99,7 @@ def material_mode(texture_condition: str) -> str:
     """Map Experiment 1 texture conditions to existing Blender helper modes."""
     condition = texture_condition.lower()
     if condition == "random_noise":
-        return "image_noise"
+        return "random_noise"
     return condition
 
 
@@ -234,12 +234,17 @@ def apply_materials(
     texture_size = noise_cfg.get("texture_size", (256, 256))
     if not isinstance(texture_size, (list, tuple)) or len(texture_size) != 2:
         texture_size = (256, 256)
-    random_texture_path = _random_texture_path(record)
-    random_texture_mapping = (
-        "uv"
-        if mesh_objects and all(_has_uv_layers(obj) for obj in mesh_objects)
-        else "generated_fallback"
-    )
+    noise_mapping = str(noise_cfg.get("mapping", "object")).strip().lower()
+    node_type = str(noise_cfg.get("node_type", "procedural_noise")).strip().lower()
+    use_image_texture = node_type in {"image_texture", "image_noise"} or noise_mapping in {
+        "uv",
+        "uv_image",
+    }
+    random_texture_path = _random_texture_path(record) if use_image_texture else ""
+    if noise_mapping == "uv_image":
+        noise_mapping = "uv"
+    if noise_mapping not in {"object", "generated", "uv"}:
+        noise_mapping = "object"
     for obj in mesh_objects:
         assign_principled_material(
             obj,
@@ -249,6 +254,7 @@ def apply_materials(
             roughness=noise_roughness,
             noise_scale_range=tuple(float(v) for v in noise_scale),
             noise_detail=float(noise_cfg.get("detail", 6.0)),
+            noise_mapping=noise_mapping,
             image_texture_path=random_texture_path,
             image_size=tuple(int(v) for v in texture_size),
             image_color_space=str(noise_cfg.get("color_space", "sRGB")),
@@ -266,9 +272,14 @@ def apply_materials(
         "photorealistic_material_status": "not_applicable",
         "photorealistic_fallback_reason": "",
         "random_noise_seed": seed,
-        "random_noise_texture_type": "image_texture",
+        "random_noise_texture_type": (
+            "image_texture" if use_image_texture else "procedural_noise"
+        ),
+        "random_noise_node_type": (
+            "image_texture" if use_image_texture else "ShaderNodeTexNoise"
+        ),
         "random_texture_path": random_texture_path,
         "random_texture_size": [int(v) for v in texture_size],
-        "random_texture_mapping": random_texture_mapping,
+        "random_texture_mapping": noise_mapping,
         "texture_seed_used": seed,
     }

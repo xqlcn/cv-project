@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shlex
 import stat
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,7 +24,7 @@ from exp1.config import (
     load_exp1_config,
     resolve_path,
 )
-from exp1.features.storage import feature_cache_path
+from exp1.features.storage import feature_cache_path, patch_feature_cache_path
 from exp1.metadata.manifest import load_manifest
 from src.utils.io import read_jsonl, write_jsonl
 
@@ -35,7 +37,8 @@ STAGE_ALIASES = {
         "contact_sheet",
         "labels",
     ],
-    "ml": ["features", "probes", "aggregate", "figures"],
+    "ml": ["features", "probes", "patch_features", "dense_probes", "aggregate", "figures"],
+    "dense": ["patch_features", "dense_probes", "aggregate", "figures"],
     "all": [
         "preprocess_assets",
         "render_plan",
@@ -47,6 +50,8 @@ STAGE_ALIASES = {
         "labels",
         "features",
         "probes",
+        "patch_features",
+        "dense_probes",
         "aggregate",
         "figures",
     ],
@@ -63,6 +68,8 @@ KNOWN_STAGES = {
     "labels",
     "features",
     "probes",
+    "patch_features",
+    "dense_probes",
     "aggregate",
     "figures",
 }
@@ -116,6 +123,36 @@ def asset_manifest_matches_enabled_sources(path: Path, cfg) -> bool:
     return not bool(manifest_datasets & disabled_datasets)
 
 
+def asset_manifest_satisfies_category_requirements(path: Path, cfg) -> bool:
+    """Return true when a cached asset manifest satisfies requested categories."""
+    if not path.is_file():
+        return False
+    try:
+        rows = load_manifest(path, validate=False)
+    except Exception:
+        return False
+    if rows.empty or "category" not in rows.columns:
+        return False
+
+    required = cfg.assets.get("required_categories")
+    if required is None and bool(
+        cfg.assets.get("fail_on_missing_requested_categories", False)
+    ):
+        required = cfg.assets.get("categories")
+    min_per_category = cfg.assets.get("min_objects_per_category")
+    if required is None and min_per_category is None:
+        return True
+
+    counts = Counter(str(value) for value in rows["category"].dropna())
+    categories = (
+        [str(category) for category in required]
+        if required is not None
+        else sorted(counts)
+    )
+    minimum = int(min_per_category) if min_per_category is not None else 1
+    return all(counts.get(category, 0) >= minimum for category in categories)
+
+
 def _run_command(
     name: str,
     command: Sequence[str],
@@ -144,6 +181,34 @@ def _chunk_path(chunks_dir: Path, index: int) -> Path:
     return chunks_dir / f"chunk_{index:04d}.jsonl"
 
 
+def _json_safe_value(value):
+    """Convert pandas/numpy manifest values into JSONL-safe Python values."""
+    if value is None:
+        return None
+    if isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(v) for v in value]
+    if hasattr(value, "tolist"):
+        return _json_safe_value(value.tolist())
+    if hasattr(value, "item"):
+        try:
+            return _json_safe_value(value.item())
+        except (TypeError, ValueError):
+            pass
+    return str(value)
+
+
+def _json_safe_row(row: dict) -> dict:
+    return {str(key): _json_safe_value(value) for key, value in row.items()}
+
+
 def write_render_chunks(
     render_plan: Path,
     chunks_dir: Path,
@@ -152,23 +217,32 @@ def write_render_chunks(
     shell_script: Path,
     config_path: Path,
     project_root: Path,
+    parallel_workers: int = 1,
+    command_manifest: Optional[Path] = None,
 ) -> list[Path]:
-    """Split a render plan into JSONL chunks and write a Blender shell script."""
-    rows = load_manifest(render_plan, validate=False).to_dict(orient="records")
+    """Split a render plan and write local/distributed Blender commands."""
+    rows = [
+        _json_safe_row(row)
+        for row in load_manifest(render_plan, validate=False).to_dict(orient="records")
+    ]
     chunks_dir.mkdir(parents=True, exist_ok=True)
+    stale_paths = {
+        *chunks_dir.glob("chunk_*.jsonl"),
+        *chunks_dir.glob("chunk_*.render_status.jsonl"),
+    }
+    for stale in stale_paths:
+        stale.unlink()
+    status_manifest = chunks_dir / "render_status.jsonl"
+    if status_manifest.exists():
+        status_manifest.unlink()
+
     chunk_paths: list[Path] = []
     for start in range(0, len(rows), int(chunk_size)):
         path = _chunk_path(chunks_dir, len(chunk_paths))
         write_jsonl(path, rows[start : start + int(chunk_size)])
         chunk_paths.append(path)
 
-    shell_script.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        f"cd {shlex.quote(str(project_root))}",
-        'BLENDER_BIN="${BLENDER_BIN:-blender}"',
-    ]
+    commands: list[str] = []
     for chunk in chunk_paths:
         status_path = chunk.with_suffix(".render_status.jsonl")
         args = [
@@ -185,8 +259,41 @@ def write_render_chunks(
             "--status-output",
             str(status_path),
         ]
-        quoted = " ".join(shlex.quote(arg) for arg in args)
-        lines.append(f'"${{BLENDER_BIN}}" {quoted}')
+        commands.append(
+            '"${BLENDER_BIN:-blender}" '
+            + " ".join(shlex.quote(arg) for arg in args)
+        )
+
+    if command_manifest is None:
+        command_manifest = chunks_dir / "render_chunk_commands.txt"
+    command_manifest.write_text("\n".join(commands) + "\n", encoding="utf-8")
+
+    shell_script.parent.mkdir(parents=True, exist_ok=True)
+    workers = max(1, int(parallel_workers))
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        f"cd {shlex.quote(str(project_root))}",
+        'BLENDER_BIN="${BLENDER_BIN:-blender}"',
+        f'RENDER_JOBS="${{RENDER_JOBS:-{workers}}}"',
+        f"COMMAND_FILE={shlex.quote(str(command_manifest))}",
+        'if command -v parallel >/dev/null 2>&1; then',
+        '  parallel --halt soon,fail=1 -j "${RENDER_JOBS}" < "${COMMAND_FILE}"',
+        "else",
+        "  pids=()",
+        "  while IFS= read -r cmd; do",
+        '    bash -lc "${cmd}" &',
+        '    pids+=("$!")',
+        '    if [ "${#pids[@]}" -ge "${RENDER_JOBS}" ]; then',
+        '      wait "${pids[0]}"',
+        '      pids=("${pids[@]:1}")',
+        "    fi",
+        '  done < "${COMMAND_FILE}"',
+        '  for pid in "${pids[@]}"; do',
+        '    wait "${pid}"',
+        "  done",
+        "fi",
+    ]
     shell_script.write_text("\n".join(lines) + "\n", encoding="utf-8")
     shell_script.chmod(shell_script.stat().st_mode | stat.S_IXUSR)
     return chunk_paths
@@ -195,8 +302,22 @@ def write_render_chunks(
 def combine_render_status_chunks(chunks_dir: Path, output_path: Path) -> Path:
     """Combine Blender per-chunk status JSONL files into one manifest."""
     status_paths = sorted(chunks_dir.glob("chunk_*.render_status.jsonl"))
+    chunk_paths = sorted(
+        path
+        for path in chunks_dir.glob("chunk_*.jsonl")
+        if ".render_status" not in path.name
+    )
     if not status_paths:
         raise FileNotFoundError(f"No render status chunks found under {chunks_dir}")
+    if chunk_paths and len(status_paths) != len(chunk_paths):
+        missing = [
+            path.with_suffix(".render_status.jsonl").name
+            for path in chunk_paths
+            if not path.with_suffix(".render_status.jsonl").is_file()
+        ]
+        raise FileNotFoundError(
+            "Missing render status chunks: " + ", ".join(missing[:16])
+        )
     rows = []
     for path in status_paths:
         rows.extend(read_jsonl(path))
@@ -314,6 +435,10 @@ def main() -> None:
         if (
             outputs_satisfied(preprocess_outputs)
             and asset_manifest_matches_enabled_sources(normalized_asset_manifest, cfg)
+            and asset_manifest_satisfies_category_requirements(
+                normalized_asset_manifest,
+                cfg,
+            )
             and not args.force
         ):
             print("[skip] preprocess_assets: outputs already exist")
@@ -371,8 +496,12 @@ def main() -> None:
                     shell_script=render_script,
                     config_path=config_path,
                     project_root=project_root,
+                    parallel_workers=int(cfg.render.get("parallel_workers", 1)),
                 )
-                print(f"Wrote {len(paths)} render chunk(s) and {render_script}")
+                print(
+                    f"Wrote {len(paths)} render chunk(s), {render_script}, "
+                    f"and {chunks_dir / 'render_chunk_commands.txt'}"
+                )
 
     if "render" in stages:
         status_outputs = sorted(chunks_dir.glob("chunk_*.render_status.jsonl"))
@@ -444,11 +573,11 @@ def main() -> None:
             dry_run=args.dry_run,
         )
 
-    label_outputs = [
-        labels_dir / f"labels_{task}.parquet"
-        for task in cfg.tasks.enabled
-        if cfg.tasks.definitions[str(task)].get("label_path") is not None
-    ]
+    label_outputs = []
+    for task in cfg.tasks.enabled:
+        label_path = cfg.tasks.definitions[str(task)].get("label_path")
+        if label_path is not None:
+            label_outputs.append(_resolve_required(project_root, label_path))
     if "labels" in stages:
         _run_command(
             "labels",
@@ -499,6 +628,65 @@ def main() -> None:
             dry_run=args.dry_run,
         )
 
+    dense_layers = cfg.models.get("dense_layers")
+    dense_tasks = {str(task) for task in cfg.tasks.enabled}
+    if dense_layers:
+        dense_enabled = cfg.models.get("dense_enabled") or cfg.models.enabled
+        patch_outputs = [
+            patch_feature_cache_path(
+                feature_dir, model_name=str(model), layer_name=str(layer)
+            )
+            for model in dense_enabled
+            for layer in dense_layers
+        ]
+        if "patch_features" in stages:
+            _run_command(
+                "patch_features",
+                [
+                    py,
+                    "scripts/extract_exp1_patch_features.py",
+                    "--config",
+                    str(config_path),
+                    "--render-manifest",
+                    str(valid_render_manifest),
+                    "--feature-dir",
+                    str(feature_dir),
+                ],
+                outputs=patch_outputs,
+                force=args.force,
+                dry_run=args.dry_run,
+            )
+
+        if "dense_probes" in stages and "dense_depth_patches" in dense_tasks:
+            _run_command(
+                "dense_depth_probes",
+                [
+                    py,
+                    "scripts/train_all_dense_depth_probes.py",
+                    "--config",
+                    str(config_path),
+                ],
+                force=args.force,
+                dry_run=args.dry_run,
+            )
+        if "dense_probes" in stages and "dense_surface_normal_patches" in dense_tasks:
+            _run_command(
+                "dense_surface_normal_probes",
+                [
+                    py,
+                    "scripts/train_all_dense_surface_normal_probes.py",
+                    "--config",
+                    str(config_path),
+                ],
+                force=args.force,
+                dry_run=args.dry_run,
+            )
+    else:
+        if "patch_features" in stages or "dense_probes" in stages:
+            print(
+                "[skip] dense stages: models.dense_layers is not configured"
+            )
+
     results_output = results_dir / "exp1_results_long.csv"
     drops_output = results_dir / "exp1_texture_drops.csv"
     if "aggregate" in stages:
@@ -545,6 +733,10 @@ def main() -> None:
         print(
             "Blender chunks are ready. Render with: "
             f"bash {shlex.quote(str(render_script))}"
+        )
+        print(
+            "For multi-machine rendering, split this command file across workers: "
+            f"{chunks_dir / 'render_chunk_commands.txt'}"
         )
 
 

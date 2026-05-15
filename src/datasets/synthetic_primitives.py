@@ -1,8 +1,9 @@
 """
 Synthetic primitive meshes for **controlled** experiments (default pipeline).
 
-Meshes are written under ``data/synthetic_primitives/{split}/`` as ``.obj`` files so the
-same trimesh/pyrender path as ModelNet40 applies. Records match the shared schema.
+Meshes are written under ``data/synthetic_primitives/{split}/`` as ``.obj`` files so
+they consume the same trimesh/pyrender path as imported meshes. Records match the
+shared schema.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ def load_synthetic_catalog(root: Union[str, Path]) -> List[Dict[str, Any]]:
 
 
 class SyntheticPrimitiveMeshDataset(Dataset):
-    """Mesh-only index for cached synthetic primitives (same keys as ModelNet40MeshDataset)."""
+    """Mesh-only index for cached synthetic primitives."""
 
     def __init__(
         self,

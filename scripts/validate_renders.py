@@ -36,6 +36,18 @@ def _qc_config(render_qc: Mapping[str, Any]) -> RenderQCConfig:
         normal_norm_tolerance=float(render_qc.get("normal_norm_tolerance", 0.1)),
         depth_atol=float(render_qc.get("depth_atol", 1e-4)),
         normal_atol=float(render_qc.get("normal_atol", 1e-4)),
+        min_random_noise_rgb_std=float(
+            render_qc.get("min_random_noise_rgb_std", 0.02)
+        ),
+        fail_low_random_noise_variation=bool(
+            render_qc.get("fail_low_random_noise_variation", False)
+        ),
+        fail_random_noise_image_texture=bool(
+            render_qc.get("fail_random_noise_image_texture", False)
+        ),
+        fail_material_override_mismatch=bool(
+            render_qc.get("fail_material_override_mismatch", False)
+        ),
     )
 
 

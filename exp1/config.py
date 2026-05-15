@@ -17,10 +17,14 @@ def default_exp1_config_path() -> Path:
     return project_root() / "configs" / "exp1_smoke.yaml"
 
 
-def load_exp1_config(path: Path) -> DictConfig:
-    """Load an Experiment 1 config with its simple Hydra-style defaults stack."""
-    OmegaConf.register_new_resolver("now", lambda fmt: "now", replace=True)
+def _load_config_with_defaults(path: Path, *, seen: Optional[set[Path]] = None) -> Any:
+    """Load a config file and recursively expand its simple defaults stack."""
     cfg_dir = path.resolve().parent
+    resolved_path = path.resolve()
+    seen = set() if seen is None else set(seen)
+    if resolved_path in seen:
+        raise ValueError(f"Cyclic config defaults include {resolved_path}")
+    seen.add(resolved_path)
     raw_cfg = OmegaConf.load(path)
     if not OmegaConf.is_dict(raw_cfg):
         raise TypeError(
@@ -36,17 +40,33 @@ def load_exp1_config(path: Path) -> DictConfig:
         if entry == "_self_":
             continue
         if isinstance(entry, str):
-            parts.append(OmegaConf.load(cfg_dir / f"{entry}.yaml"))
+            parts.append(
+                _load_config_with_defaults(
+                    cfg_dir / f"{entry}.yaml",
+                    seen=seen,
+                )
+            )
         elif isinstance(entry, dict):
             for group, name in entry.items():
                 if name in {None, "null"}:
                     continue
-                parts.append(OmegaConf.load(cfg_dir / str(group) / f"{name}.yaml"))
+                parts.append(
+                    _load_config_with_defaults(
+                        cfg_dir / str(group) / f"{name}.yaml",
+                        seen=seen,
+                    )
+                )
         else:
             raise TypeError(f"Unsupported defaults entry in {path}: {entry!r}")
 
     parts.append(cfg)
-    merged = OmegaConf.merge(*parts)
+    return OmegaConf.merge(*parts)
+
+
+def load_exp1_config(path: Path) -> DictConfig:
+    """Load an Experiment 1 config with its simple Hydra-style defaults stack."""
+    OmegaConf.register_new_resolver("now", lambda fmt: "now", replace=True)
+    merged = _load_config_with_defaults(path)
     if not OmegaConf.is_dict(merged):
         raise TypeError(
             f"Merged config is not a mapping for {path}: {type(merged).__name__}"

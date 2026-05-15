@@ -37,9 +37,11 @@ scale_grid:
 models:
   enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
   layers: ["final", "layer4", "layer8", "layer12"]
+  dense_enabled: ["clip_vit_b16", "clip_vit_l14", "dinov2_vit_b"]
+  dense_layers: ["final", "layer4", "layer8", "layer12"]
 
 tasks:
-  enabled: ["surface_normal_aggregate", "relative_depth_regions"]
+  enabled: ["dense_surface_normal_patches", "relative_depth_regions"]
 
 probe:
   epochs: 30

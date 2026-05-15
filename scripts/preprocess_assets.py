@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -16,7 +17,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from exp1.assets.discover import (
     discover_assets_from_directory,
-    discover_modelnet40_assets,
     load_assets_from_manifest,
 )
 from exp1.assets.normalize import normalize_asset_manifest
@@ -25,6 +25,7 @@ from exp1.assets.shapenet import (
     discover_huggingface_shapenet_assets,
 )
 from exp1.assets.validate import (
+    assign_category_stratified_object_splits,
     assign_object_disjoint_splits,
     validate_asset_manifest,
     write_object_split_manifest,
@@ -48,12 +49,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Local Objaverse mesh directory, scanned recursively.",
-    )
-    parser.add_argument(
-        "--modelnet-root",
-        type=Path,
-        default=None,
-        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--shapenet-hf-repo-id",
@@ -93,6 +88,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-manifest", type=Path, default=None)
     parser.add_argument("--normalized-root", type=Path, default=None)
     parser.add_argument("--max-objects", type=int, default=None)
+    parser.add_argument(
+        "--max-objects-per-category",
+        type=int,
+        default=None,
+        help="Limit discovered assets independently within each category.",
+    )
     parser.add_argument("--target-extent", type=float, default=1.0)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
@@ -173,14 +174,6 @@ def _cli_sources(args: argparse.Namespace) -> List[Dict[str, Any]]:
                 "source_dataset": "custom_assets",
             }
         )
-    if args.modelnet_root is not None:
-        sources.append(
-            {
-                "name": "modelnet40_cli",
-                "type": "modelnet40",
-                "root": str(args.modelnet_root),
-            }
-        )
     return sources
 
 
@@ -233,6 +226,7 @@ def _discover_from_source(
     project_root: Path,
     allowed_extensions: Iterable[str],
     max_objects: Optional[int],
+    max_objects_per_category: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     source_type = str(source.get("type", "manifest"))
     source_dataset = str(source.get("source_dataset", source.get("name", "unknown")))
@@ -248,14 +242,6 @@ def _discover_from_source(
             source_dataset=source_dataset,
             max_objects=max_objects,
         )
-
-    if source_type == "modelnet40":
-        root_value = source.get("root")
-        if root_value is None:
-            raise ValueError(f"Source {source.get('name')} is missing root")
-        root = resolve_path(project_root, str(root_value))
-        assert root is not None
-        return discover_modelnet40_assets(root, max_objects=max_objects)
 
     if source_type in {"huggingface_shapenet", "shapenet_hf"}:
         local_dir = _optional_path(project_root, source.get("local_dir"))
@@ -281,6 +267,7 @@ def _discover_from_source(
             source_dataset=source_dataset,
             allowed_extensions=tuple(allowed_extensions),
             max_objects=max_objects,
+            max_objects_per_category=max_objects_per_category,
         )
 
     if source_type in {"mesh_directory", "objaverse"}:
@@ -326,11 +313,78 @@ def _interleave_source_rows(
     return selected
 
 
+def _limit_rows_by_category(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    max_per_category: Optional[int],
+    categories: Optional[Iterable[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Keep at most N discovered assets per category, preserving row order."""
+    allowed = None if categories is None else {str(category) for category in categories}
+    counts: Dict[str, int] = {}
+    selected: List[Dict[str, Any]] = []
+    for row in rows:
+        row_dict = dict(row)
+        category = str(row_dict.get("category", "unknown"))
+        if allowed is not None and category not in allowed:
+            continue
+        count = counts.get(category, 0)
+        if max_per_category is not None and count >= int(max_per_category):
+            continue
+        counts[category] = count + 1
+        selected.append(row_dict)
+    return selected
+
+
+def _validate_category_requirements(
+    rows: Iterable[Mapping[str, Any]],
+    cfg: DictConfig,
+    *,
+    stage: str,
+) -> None:
+    """Fail early when a production run discovers only a partial category set."""
+    required = _optional_string_list(cfg.assets.get("required_categories"))
+    if required is None and bool(
+        cfg.assets.get("fail_on_missing_requested_categories", False)
+    ):
+        required = _optional_string_list(cfg.assets.get("categories"))
+
+    min_per_category = cfg.assets.get("min_objects_per_category")
+    if required is None and min_per_category is None:
+        return
+
+    row_list = [dict(row) for row in rows]
+    counts = Counter(str(row.get("category", "unknown")) for row in row_list)
+    categories = required or sorted(counts)
+    minimum = int(min_per_category) if min_per_category is not None else 1
+    failures = [
+        f"{category}: found {counts.get(category, 0)}, required {minimum}"
+        for category in categories
+        if counts.get(category, 0) < minimum
+    ]
+    if failures:
+        observed = ", ".join(
+            f"{category}={count}" for category, count in sorted(counts.items())
+        )
+        raise RuntimeError(
+            f"Asset category requirements failed after {stage}. "
+            + "; ".join(failures)
+            + f". Observed counts: {observed or 'none'}."
+        )
+
+
 def _discover_assets(args: argparse.Namespace, cfg: DictConfig) -> List[Dict[str, Any]]:
     project_root = Path(str(cfg.paths.project_root)).expanduser().resolve()
     max_objects = args.max_objects
     if max_objects is None and cfg.assets.get("max_objects") is not None:
         max_objects = int(cfg.assets.max_objects)
+    max_objects_per_category = args.max_objects_per_category
+    if (
+        max_objects_per_category is None
+        and cfg.assets.get("max_objects_per_category") is not None
+    ):
+        max_objects_per_category = int(cfg.assets.max_objects_per_category)
+    categories = _optional_string_list(cfg.assets.get("categories"))
     allowed = tuple(str(ext).lower() for ext in cfg.assets.allowed_extensions)
 
     cli_sources = _cli_sources(args)
@@ -343,7 +397,12 @@ def _discover_assets(args: argparse.Namespace, cfg: DictConfig) -> List[Dict[str
                     source,
                     project_root=project_root,
                     allowed_extensions=allowed,
-                    max_objects=_source_max_objects(None, source),
+                    max_objects=(
+                        None
+                        if max_objects_per_category is not None
+                        else _source_max_objects(None, source)
+                    ),
+                    max_objects_per_category=max_objects_per_category,
                 )
             except FileNotFoundError as exc:
                 if not bool(source.get("skip_missing", False)):
@@ -366,7 +425,11 @@ def _discover_assets(args: argparse.Namespace, cfg: DictConfig) -> List[Dict[str
                 f"No assets discovered from {source_name}. Check that the input path "
                 "exists and contains supported mesh files." + skipped
             )
-        return rows
+        return _limit_rows_by_category(
+            rows,
+            max_per_category=max_objects_per_category,
+            categories=categories,
+        )
 
     source_rows: List[List[Dict[str, Any]]] = []
     skipped_sources: List[str] = []
@@ -380,7 +443,12 @@ def _discover_assets(args: argparse.Namespace, cfg: DictConfig) -> List[Dict[str
                 source_dict,
                 project_root=project_root,
                 allowed_extensions=allowed,
-                max_objects=_source_max_objects(None, source),
+                max_objects=(
+                    None
+                    if max_objects_per_category is not None
+                    else _source_max_objects(None, source)
+                ),
+                max_objects_per_category=max_objects_per_category,
             )
         except FileNotFoundError as exc:
             if not bool(source.get("skip_missing", False)):
@@ -403,7 +471,11 @@ def _discover_assets(args: argparse.Namespace, cfg: DictConfig) -> List[Dict[str
             "--objaverse-root, --input-manifest, --asset-root, or enable "
             "ShapeNetCore/Objaverse sources in the config." + skipped
         )
-    return rows
+    return _limit_rows_by_category(
+        rows,
+        max_per_category=max_objects_per_category,
+        categories=categories,
+    )
 
 
 def main() -> None:
@@ -434,13 +506,23 @@ def main() -> None:
     )
 
     discovered = _discover_assets(args, cfg)
+    _validate_category_requirements(discovered, cfg, stage="discovery")
     if not bool(cfg.assets.get("split_from_manifest", False)):
-        discovered = assign_object_disjoint_splits(
-            discovered,
-            fractions=OmegaConf.to_container(cfg.splits.fractions, resolve=True),
-            labels=[str(label) for label in cfg.splits.labels],
-            seed=int(cfg.splits.seed),
-        )
+        split_kwargs = {
+            "fractions": OmegaConf.to_container(cfg.splits.fractions, resolve=True),
+            "labels": [str(label) for label in cfg.splits.labels],
+            "seed": int(cfg.splits.seed),
+        }
+        if bool(cfg.splits.get("stratify_by_category", False)):
+            discovered = assign_category_stratified_object_splits(
+                discovered,
+                **split_kwargs,
+            )
+        else:
+            discovered = assign_object_disjoint_splits(
+                discovered,
+                **split_kwargs,
+            )
     write_jsonl(raw_manifest, discovered)
 
     if args.no_normalize:
@@ -455,6 +537,11 @@ def main() -> None:
         fail_fast=bool(args.fail_fast),
     )
     validate_asset_manifest(normalized, require_normalized_paths=True)
+    _validate_category_requirements(
+        [row for row in normalized if row.get("asset_status") == "normalized"],
+        cfg,
+        stage="normalization",
+    )
     write_jsonl(normalized_manifest, normalized)
     write_object_split_manifest(normalized, split_manifest)
 

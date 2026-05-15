@@ -8,7 +8,7 @@ Launch (from project root):
       --project-root .
 
 The mesh manifest is JSON: list of {object_id, category, mesh_path}. Meshes may be
-ModelNet .off files or OBJ/GLB/FBX (see blender/mesh_utils.py).
+OBJ/GLB/FBX or ASCII OFF files (see blender/mesh_utils.py).
 """
 
 from __future__ import annotations

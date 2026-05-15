@@ -45,7 +45,7 @@ REGRESSION_TASKS = {
 class ProbeTrainConfig:
     """Hyperparameters for frozen-feature linear probe training."""
 
-    task: str = "surface_normal_aggregate"
+    task: str = "relative_depth_regions"
     epochs: int = 30
     batch_size: int = 128
     lr: float = 1e-3
@@ -177,12 +177,6 @@ def _loss_for_task(
     valid_mask: torch.Tensor,
     cfg: ProbeTrainConfig,
 ) -> torch.Tensor:
-    if task == "surface_normal_aggregate":
-        return surface_normal_loss(
-            outputs,
-            targets,
-            kind=str(cfg.surface_normal_loss),
-        )
     if task == "relative_depth_regions":
         return relative_depth_loss(outputs, targets, valid_mask)
     if task == "lighting_direction":
@@ -199,8 +193,6 @@ def _metrics_for_task(
     targets: torch.Tensor,
     valid_mask: Optional[torch.Tensor],
 ) -> dict[str, float]:
-    if task == "surface_normal_aggregate":
-        return surface_normal_metrics(outputs, targets)
     if task == "relative_depth_regions":
         if valid_mask is None:
             valid_mask = torch.ones_like(targets, dtype=torch.bool)
@@ -257,8 +249,6 @@ def evaluate_probe_arrays(
 
 
 def _score(metrics: Mapping[str, float], *, task: str) -> float:
-    if task == "surface_normal_aggregate":
-        return float(metrics["angular_error_deg_mean"])
     if task == "relative_depth_regions":
         value = float(metrics["valid_pair_accuracy"])
         return value if np.isfinite(value) else -float("inf")
@@ -276,8 +266,6 @@ def _is_better(
 ) -> bool:
     if best is None:
         return True
-    if task == "surface_normal_aggregate":
-        return value < best - float(min_delta)
     if task == "relative_depth_regions":
         return value > best + float(min_delta)
     if task in REGRESSION_TASKS:
@@ -289,7 +277,7 @@ def train_probe_arrays(
     train_features: np.ndarray,
     train_targets: np.ndarray,
     *,
-    task: str = "surface_normal_aggregate",
+    task: str = "relative_depth_regions",
     train_valid_mask: Optional[np.ndarray] = None,
     val_features: Optional[np.ndarray] = None,
     val_targets: Optional[np.ndarray] = None,
@@ -465,25 +453,6 @@ def _prediction_dataframe(
         for column in ("object_id", "source_dataset", "category", "texture_condition"):
             if column in metadata.columns:
                 rows[column] = metadata[column].to_numpy()
-    if task == "surface_normal_aggregate":
-        names = list(
-            target_columns or ["mean_normal_x", "mean_normal_y", "mean_normal_z"]
-        )
-        for idx, name in enumerate(names):
-            rows[f"pred_{name}"] = pred[:, idx]
-            rows[f"target_{name}"] = target[:, idx]
-        pred_norm = pred / np.clip(
-            np.linalg.norm(pred, axis=1, keepdims=True), 1e-8, None
-        )
-        target_norm = target / np.clip(
-            np.linalg.norm(target, axis=1, keepdims=True),
-            1e-8,
-            None,
-        )
-        cos = np.clip((pred_norm * target_norm).sum(axis=1), -1.0, 1.0)
-        rows["angular_error_deg"] = np.degrees(np.arccos(cos))
-        return pd.DataFrame(rows)
-
     if task == "relative_depth_regions":
         mask = _as_valid_mask(valid_mask, shape=target.shape)
         probs = torch.sigmoid(predictions).detach().cpu().numpy().astype(np.float32)

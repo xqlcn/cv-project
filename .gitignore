@@ -4,12 +4,27 @@ data
 !exp1/data/**/*.py
 depth_exps
 snorm_exps
+*.zip
+.history/
+.pytest_pycache/
 
 # Experiment 1 generated artifacts. Kept explicit even though data/outputs are
 # ignored above, so the project contract is visible at the pipeline boundary.
 data/exp1/
+data/exp1_main/
+data/exp1_dense/
+data/exp1_under12h*/
+data/hf_cache/
+data/shapenet_hf/
 data/synthetic_primitives/
 outputs/exp1/
+outputs/exp1_bounded/
+outputs/exp1_main/
+outputs/exp1_dense/
+outputs/exp1_under12h*/
+outputs/exp1_rerender_analysis_figures/
+outputs/exp1_dense_probe_analysis/
+outputs/sanity_check_preprocessing/
 outputs/hydra/
 
 
@@ -145,6 +160,11 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+.DS_Store
+
+# Local-only project docs (kept on disk, never committed)
 AGENTS.md
 EXPERIMENT1_HANDOFF.md
 EXPERIMENT1_TASKS.md
+
+blog/

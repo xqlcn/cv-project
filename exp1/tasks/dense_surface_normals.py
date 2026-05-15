@@ -1,0 +1,374 @@
+"""Dense per-patch surface-normal task.
+
+This task pools rendered ``normal_camera.npy`` buffers to the ViT patch grid so
+linear heads can predict one camera-frame surface normal per patch token. It does
+not write a separate label table: the dense targets are loaded lazily from the
+render manifest's ``normal_path`` and ``mask_path`` columns.
+"""
+
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence, Union
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset
+
+from exp1.features.storage import load_patch_feature_cache
+
+__all__ = [
+    "DenseSurfaceNormalSample",
+    "Exp1DenseSurfaceNormalDataset",
+    "align_normal_mask_to_model_input",
+    "pool_surface_normals",
+]
+
+
+def _resolve_path(project_root: Optional[Union[str, Path]], value: Any) -> Path:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute() or project_root is None:
+        return path
+    return Path(project_root) / path
+
+
+def _resize_nearest(array: np.ndarray, *, height: int, width: int) -> np.ndarray:
+    arr = np.asarray(array)
+    dtype = arr.dtype
+    if arr.ndim == 2:
+        tensor = torch.from_numpy(arr).float()[None, None]
+        out = F.interpolate(tensor, size=(int(height), int(width)), mode="nearest")
+        return out[0, 0].cpu().numpy().astype(dtype, copy=False)
+    if arr.ndim == 3:
+        tensor = torch.from_numpy(np.moveaxis(arr, -1, 0)).float()[None]
+        out = F.interpolate(tensor, size=(int(height), int(width)), mode="nearest")
+        return np.moveaxis(out[0].cpu().numpy(), 0, -1).astype(dtype, copy=False)
+    raise ValueError(f"Expected 2D or 3D array for resize, got shape {arr.shape}")
+
+
+def align_normal_mask_to_model_input(
+    normal: np.ndarray,
+    mask: np.ndarray,
+    *,
+    model_input_size: Optional[int] = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply the deterministic resize/center-crop geometry used by ViT inputs."""
+    normal_arr = np.asarray(normal, dtype=np.float32)
+    mask_arr = np.asarray(mask, dtype=bool)
+    if normal_arr.ndim != 3 or normal_arr.shape[-1] != 3:
+        raise ValueError(f"Expected normal array (H,W,3), got {normal_arr.shape}")
+    if mask_arr.ndim != 2:
+        raise ValueError(f"Expected 2D mask array, got {mask_arr.shape}")
+    if normal_arr.shape[:2] != mask_arr.shape:
+        raise ValueError(
+            f"normal shape {normal_arr.shape[:2]} must match mask shape {mask_arr.shape}"
+        )
+    if model_input_size is None or int(model_input_size) <= 0:
+        return normal_arr, mask_arr
+
+    target = int(model_input_size)
+    height, width = mask_arr.shape
+    if height == target and width == target:
+        return normal_arr, mask_arr
+
+    scale = float(target) / float(min(height, width))
+    resized_h = max(target, int(round(height * scale)))
+    resized_w = max(target, int(round(width * scale)))
+    normal_resized = _resize_nearest(normal_arr, height=resized_h, width=resized_w)
+    mask_resized = (
+        _resize_nearest(mask_arr.astype(np.float32), height=resized_h, width=resized_w)
+        > 0.5
+    )
+
+    y0 = max(0, (resized_h - target) // 2)
+    x0 = max(0, (resized_w - target) // 2)
+    return (
+        normal_resized[y0 : y0 + target, x0 : x0 + target],
+        mask_resized[y0 : y0 + target, x0 : x0 + target],
+    )
+
+
+def pool_surface_normals(
+    normal: np.ndarray,
+    *,
+    grid_rows: int,
+    grid_cols: int,
+    mask: Optional[np.ndarray] = None,
+    min_valid_fraction: float = 0.0,
+    eps: float = 1e-6,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pool a dense normal map to a patch grid and re-normalize each vector."""
+    arr = np.asarray(normal, dtype=np.float32)
+    if arr.ndim != 3 or arr.shape[-1] != 3:
+        raise ValueError(f"surface-normal pool input must be (H,W,3), got {arr.shape}")
+    height, width = arr.shape[:2]
+    if grid_rows <= 0 or grid_cols <= 0:
+        raise ValueError("grid_rows and grid_cols must be positive")
+
+    valid_input = np.isfinite(arr).all(axis=-1)
+    normal_norm = np.linalg.norm(arr, axis=-1)
+    valid_input &= normal_norm > float(eps)
+    if mask is not None:
+        mask_arr = np.asarray(mask, dtype=bool)
+        if mask_arr.shape != arr.shape[:2]:
+            raise ValueError(
+                f"mask shape {mask_arr.shape} must match normal shape {arr.shape[:2]}"
+            )
+        valid_input &= mask_arr
+
+    row_edges = np.linspace(0, height, grid_rows + 1, dtype=int)
+    col_edges = np.linspace(0, width, grid_cols + 1, dtype=int)
+    pooled = np.zeros((grid_rows, grid_cols, 3), dtype=np.float32)
+    valid = np.zeros((grid_rows, grid_cols), dtype=bool)
+    min_fraction = max(0.0, float(min_valid_fraction))
+    for r in range(grid_rows):
+        r0, r1 = int(row_edges[r]), int(row_edges[r + 1])
+        if r1 <= r0:
+            continue
+        for c in range(grid_cols):
+            c0, c1 = int(col_edges[c]), int(col_edges[c + 1])
+            if c1 <= c0:
+                continue
+            mask_window = valid_input[r0:r1, c0:c1]
+            count = int(mask_window.sum())
+            min_count = max(1, int(np.ceil(mask_window.size * min_fraction)))
+            if count < min_count:
+                continue
+            mean = arr[r0:r1, c0:c1][mask_window].astype(np.float64).mean(axis=0)
+            norm = float(np.linalg.norm(mean))
+            if not np.isfinite(norm) or norm <= float(eps):
+                continue
+            pooled[r, c] = (mean / norm).astype(np.float32)
+            valid[r, c] = True
+    return pooled, valid
+
+
+@dataclass
+class DenseSurfaceNormalSample:
+    """One dense surface-normal probe example."""
+
+    render_id: str
+    features: np.ndarray  # (P, P, D) float32 patch tokens
+    target: np.ndarray  # (P, P, 3) float32 pooled unit normals
+    valid: np.ndarray  # (P, P) bool mask
+
+
+class Exp1DenseSurfaceNormalDataset(Dataset):
+    """Pair patch features with per-patch surface-normal labels."""
+
+    def __init__(
+        self,
+        patch_cache: Union[str, Path],
+        *,
+        manifest: pd.DataFrame,
+        split: Optional[Union[str, Sequence[str]]] = None,
+        texture_condition: Optional[Union[str, Sequence[str]]] = None,
+        project_root: Optional[Union[str, Path]] = None,
+        min_valid_patches: int = 4,
+        min_valid_fraction_per_patch: float = 0.25,
+        feature_mode: str = "patch",
+        model_input_size: Optional[int] = None,
+        cache_targets: bool = True,
+        num_workers: int = 0,
+    ) -> None:
+        if "render_id" not in manifest.columns:
+            raise ValueError("Manifest must have a render_id column")
+        if "normal_path" not in manifest.columns or "mask_path" not in manifest.columns:
+            raise ValueError(
+                "Manifest must include normal_path and mask_path columns for the "
+                "dense surface-normal task"
+            )
+
+        cache = load_patch_feature_cache(patch_cache, mmap_mode="r")
+        self._cache = cache
+        self._render_ids = cache["render_ids"]
+        self._patch_features = cache["patch_features"]
+        self._cls_features = cache.get("cls_features")
+        self.patch_grid_shape = tuple(int(v) for v in cache["patch_grid_shape"])
+        self.patch_feature_dim = int(cache["feature_dim"])
+        self.feature_mode = str(feature_mode)
+        if self.feature_mode not in {"patch", "patch_cls"}:
+            raise ValueError(
+                f"Unsupported dense normal feature_mode: {self.feature_mode}"
+            )
+        self.cls_feature_dim = 0
+        if self.feature_mode == "patch_cls":
+            if self._cls_features is None:
+                raise ValueError(
+                    "feature_mode='patch_cls' requires patch caches saved with "
+                    "cls_features; rerun scripts/extract_exp1_patch_features.py"
+                )
+            self.cls_feature_dim = int(self._cls_features.shape[1])
+        self.feature_dim = self.patch_feature_dim + self.cls_feature_dim
+        self.project_root = project_root
+        self.min_valid_fraction_per_patch = float(min_valid_fraction_per_patch)
+        metadata = dict(cache.get("metadata", {}))
+        configured_input_size = model_input_size or metadata.get("model_input_size")
+        self.model_input_size = (
+            int(configured_input_size)
+            if configured_input_size not in {None, "", 0, "0"}
+            else None
+        )
+
+        manifest = manifest.copy()
+        manifest["render_id"] = manifest["render_id"].astype(str)
+        if split is not None:
+            split_set = {split} if isinstance(split, str) else set(split)
+            manifest = manifest[manifest["split"].astype(str).isin(split_set)]
+        if texture_condition is not None:
+            tex_set = (
+                {texture_condition}
+                if isinstance(texture_condition, str)
+                else set(texture_condition)
+            )
+            manifest = manifest[
+                manifest["texture_condition"].astype(str).isin(tex_set)
+            ]
+        cache_id_to_idx = {rid: i for i, rid in enumerate(self._render_ids.tolist())}
+        manifest = manifest[manifest["render_id"].isin(cache_id_to_idx)]
+        manifest = manifest.reset_index(drop=True)
+
+        rows: list[dict[str, Any]] = []
+        for _, row in manifest.iterrows():
+            rows.append(
+                {
+                    "render_id": str(row["render_id"]),
+                    "normal_path": str(row["normal_path"]),
+                    "mask_path": str(row["mask_path"]),
+                    "texture_condition": str(row.get("texture_condition", "")),
+                    "split": str(row.get("split", "")),
+                    "object_id": str(row.get("object_id", "")),
+                    "source_dataset": str(row.get("source_dataset", "")),
+                    "category": str(row.get("category", "")),
+                    "texture_control_group_id": str(
+                        row.get("texture_control_group_id", "")
+                    ),
+                    "cache_index": int(cache_id_to_idx[str(row["render_id"])]),
+                }
+            )
+        self.rows = pd.DataFrame(rows)
+        self._min_valid_patches = int(min_valid_patches)
+        self._target_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._cache_targets = bool(cache_targets)
+        if cache_targets:
+            self._prefill_targets(num_workers=num_workers)
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def _pool_target(
+        self, normal_path: Union[str, Path], mask_path: Union[str, Path]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        normal = np.load(
+            _resolve_path(self.project_root, normal_path), allow_pickle=False
+        ).astype(np.float32)
+        mask = np.load(
+            _resolve_path(self.project_root, mask_path), allow_pickle=False
+        ).astype(bool)
+        normal, mask = align_normal_mask_to_model_input(
+            normal,
+            mask,
+            model_input_size=self.model_input_size,
+        )
+        rows, cols = self.patch_grid_shape
+        return pool_surface_normals(
+            normal,
+            grid_rows=rows,
+            grid_cols=cols,
+            mask=mask,
+            min_valid_fraction=self.min_valid_fraction_per_patch,
+        )
+
+    def _prefill_targets(self, *, num_workers: int) -> None:
+        worker_count = max(0, int(num_workers))
+        items = list(
+            zip(
+                self.rows["render_id"].tolist(),
+                self.rows["normal_path"].tolist(),
+                self.rows["mask_path"].tolist(),
+            )
+        )
+
+        def _work(
+            item: tuple[str, str, str]
+        ) -> tuple[str, tuple[np.ndarray, np.ndarray]]:
+            render_id, normal_path, mask_path = item
+            return render_id, self._pool_target(normal_path, mask_path)
+
+        if worker_count > 1 and len(items) > 1:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                for render_id, payload in executor.map(_work, items):
+                    self._target_cache[render_id] = payload
+        else:
+            for item in items:
+                render_id, payload = _work(item)
+                self._target_cache[render_id] = payload
+
+    def get_target(self, render_id: str) -> tuple[np.ndarray, np.ndarray]:
+        if render_id in self._target_cache:
+            return self._target_cache[render_id]
+        row = self.rows[self.rows["render_id"] == str(render_id)].iloc[0]
+        target = self._pool_target(row["normal_path"], row["mask_path"])
+        if self._cache_targets:
+            self._target_cache[str(render_id)] = target
+        return target
+
+    def __getitem__(self, index: int) -> DenseSurfaceNormalSample:
+        row = self.rows.iloc[int(index)]
+        cache_index = int(row["cache_index"])
+        features = np.asarray(self._patch_features[cache_index], dtype=np.float32)
+        if self.feature_mode == "patch_cls":
+            assert self._cls_features is not None
+            cls = np.asarray(self._cls_features[cache_index], dtype=np.float32)
+            cls_grid = np.broadcast_to(
+                cls[None, None, :],
+                (*features.shape[:2], cls.shape[0]),
+            )
+            features = np.concatenate([features, cls_grid], axis=-1)
+        target, valid = self.get_target(str(row["render_id"]))
+        return DenseSurfaceNormalSample(
+            render_id=str(row["render_id"]),
+            features=features,
+            target=target,
+            valid=valid,
+        )
+
+    def materialize_arrays(self) -> dict[str, Any]:
+        """Stack the dataset into dense numpy arrays for training."""
+        features_list: list[np.ndarray] = []
+        targets_list: list[np.ndarray] = []
+        valid_list: list[np.ndarray] = []
+        kept: list[int] = []
+        for index in range(len(self)):
+            sample = self[index]
+            if int(sample.valid.sum()) < self._min_valid_patches:
+                continue
+            features_list.append(sample.features)
+            targets_list.append(sample.target)
+            valid_list.append(sample.valid)
+            kept.append(index)
+        if not features_list:
+            return {
+                "features": np.zeros(
+                    (0, *self.patch_grid_shape, self.feature_dim), dtype=np.float32
+                ),
+                "targets": np.zeros(
+                    (0, *self.patch_grid_shape, 3), dtype=np.float32
+                ),
+                "valid": np.zeros((0, *self.patch_grid_shape), dtype=bool),
+                "render_ids": np.asarray([], dtype=str),
+                "rows": self.rows.iloc[:0].reset_index(drop=True),
+            }
+        return {
+            "features": np.stack(features_list, axis=0).astype(np.float32),
+            "targets": np.stack(targets_list, axis=0).astype(np.float32),
+            "valid": np.stack(valid_list, axis=0).astype(bool),
+            "render_ids": np.asarray(
+                [self.rows.iloc[i]["render_id"] for i in kept], dtype=str
+            ),
+            "rows": self.rows.iloc[kept].reset_index(drop=True),
+        }

@@ -118,6 +118,13 @@ def main() -> None:
             )
             for task in tasks:
                 task_cfg = cfg.tasks.definitions[task]
+                if str(task_cfg.get("type", "")) == "dense_regression":
+                    print(
+                        f"Skipping dense task {task}; train it via the dense "
+                        "probe stage."
+                    )
+                    skipped.append((model_name, layer_name, task))
+                    continue
                 configured_label_path = task_cfg.get("label_path")
                 if configured_label_path is None:
                     message = (

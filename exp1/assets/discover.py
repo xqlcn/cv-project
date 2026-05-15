@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from exp1.metadata.manifest import load_manifest
-from src.datasets.modelnet40_index import discover_modelnet40_records
 
 
 ALLOWED_MESH_EXTENSIONS = (".obj", ".glb", ".gltf", ".fbx", ".ply", ".off")
@@ -151,26 +150,6 @@ def discover_assets_from_directory(
             }
         )
     return rows
-
-
-def discover_modelnet40_assets(
-    root: Union[str, Path],
-    *,
-    splits: Sequence[str] = ("train", "test"),
-    max_objects: Optional[int] = None,
-) -> List[Dict[str, Any]]:
-    """Discover ModelNet40 assets using the repo's pure filesystem scanner."""
-    records = discover_modelnet40_records(root, splits=splits)
-    if max_objects is not None:
-        records = records[: int(max_objects)]
-    return [
-        standardize_asset_record(
-            record,
-            source_dataset="modelnet40",
-            default_split=str(record.get("split", "train")),
-        )
-        for record in records
-    ]
 
 
 def load_assets_from_manifest(

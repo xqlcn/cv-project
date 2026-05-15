@@ -7,26 +7,10 @@ from exp1.tasks.camera import build_camera_labels
 from exp1.tasks.lighting import build_lighting_labels
 from exp1.tasks.relative_depth import (
     build_relative_depth_labels,
+    relative_depth_coverage_summary,
     relative_depth_label_row,
 )
 from exp1.tasks.scale import build_scale_labels
-from exp1.tasks.surface_normals import (
-    aggregate_surface_normal_label,
-    build_surface_normal_aggregate_labels,
-)
-
-
-def test_aggregate_surface_normal_label_normalizes_foreground_mean() -> None:
-    normal = np.zeros((4, 4, 3), dtype=np.float32)
-    normal[..., 2] = 1.0
-    mask = np.ones((4, 4), dtype=bool)
-
-    label = aggregate_surface_normal_label(normal, mask, min_valid_pixels=1)
-
-    assert label["label_valid"] is True
-    assert label["mean_normal_x"] == 0.0
-    assert label["mean_normal_y"] == 0.0
-    assert label["mean_normal_z"] == 1.0
 
 
 def test_relative_depth_label_row_uses_region_pairs_and_valid_masks() -> None:
@@ -51,38 +35,93 @@ def test_relative_depth_label_row_uses_region_pairs_and_valid_masks() -> None:
     assert label["relative_depth_valid_pair_count"] == 2
 
 
+def test_bbox_relative_depth_uses_foreground_extent() -> None:
+    depth = np.ones((9, 9), dtype=np.float32)
+    mask = np.zeros((9, 9), dtype=bool)
+    mask[3:6, 3:6] = True
+    depth[3:6, 3:4] = 1.0
+    depth[3:6, 4:5] = 2.0
+    depth[3:6, 5:6] = 3.0
+
+    full_image = relative_depth_label_row(
+        depth,
+        mask,
+        region_pairs=[(0, 1), (1, 2)],
+        grid_size=(3, 3),
+        min_valid_fraction_per_region=0.5,
+        min_depth_margin=0.1,
+    )
+    bbox = relative_depth_label_row(
+        depth,
+        mask,
+        region_pairs=[(0, 1), (1, 2)],
+        grid_size=(3, 3),
+        min_valid_fraction_per_region=0.5,
+        min_depth_margin=0.1,
+        use_foreground_bbox=True,
+    )
+
+    assert full_image["relative_depth_valid_pair_count"] == 0
+    assert bbox["relative_depth_region_frame"] == "foreground_bbox"
+    assert bbox["relative_depth_valid_pair_count"] == 2
+    assert bbox["pair_0_label"] == 1
+
+
+def test_relative_depth_coverage_summary_counts_active_pairs() -> None:
+    manifest = [
+        {"render_id": "r1", "split": "train", "texture_condition": "flat"},
+        {"render_id": "r2", "split": "train", "texture_condition": "flat"},
+    ]
+    labels = build_relative_depth_labels(
+        [
+            {
+                "render_id": "r1",
+                "depth_path": "",
+                "mask_path": "",
+            },
+            {
+                "render_id": "r2",
+                "depth_path": "",
+                "mask_path": "",
+            },
+        ],
+        region_pairs=[(0, 1)],
+    )
+    labels["pair_0_valid"] = [True, False]
+    labels["label_valid"] = [True, False]
+
+    summary = relative_depth_coverage_summary(manifest, labels)
+
+    assert summary.loc[0, "example_count"] == 2
+    assert summary.loc[0, "valid_example_count"] == 1
+    assert summary.loc[0, "active_pair_count"] == 1
+
+
 def test_build_labels_from_buffers_and_join_by_render_id(tmp_path) -> None:
-    normal = np.zeros((4, 4, 3), dtype=np.float32)
-    normal[..., 1] = 1.0
     mask = np.ones((4, 4), dtype=bool)
     depth = np.ones((4, 4), dtype=np.float32)
-    normal_path = tmp_path / "normal.npy"
     mask_path = tmp_path / "mask.npy"
     depth_path = tmp_path / "depth.npy"
-    np.save(normal_path, normal)
     np.save(mask_path, mask)
     np.save(depth_path, depth)
     rows = [
         {
             "render_id": "r1",
             "object_id": "obj",
-            "normal_path": str(normal_path),
             "depth_path": str(depth_path),
             "mask_path": str(mask_path),
         }
     ]
 
-    snorm = build_surface_normal_aggregate_labels(rows, min_valid_pixels=1)
     rdepth = build_relative_depth_labels(
         rows,
         region_pairs=[(0, 1)],
         grid_size=(2, 2),
         min_depth_margin=0.1,
     )
-    joined = join_labels_by_render_id(snorm, rdepth)
+    joined = join_labels_by_render_id(rdepth, rdepth)
 
     assert joined.loc[0, "render_id"] == "r1"
-    assert joined.loc[0, "mean_normal_y"] == 1.0
     assert joined.loc[0, "relative_depth_valid_pair_count"] == 0
 
 

@@ -35,6 +35,7 @@ class DINOExtractorConfig:
     revision: Optional[str] = None
     image_size: int = 518
     layers: Optional[List[int]] = None  # 1-based block indices (converted to 0-based internally)
+    return_patch_layers: bool = False
 
 
 class FrozenDINOv2Extractor(nn.Module):
@@ -103,6 +104,7 @@ class FrozenDINOv2Extractor(nn.Module):
         )
         last = outputs.last_hidden_state
         layer_cls: Dict[int, torch.Tensor] = {}
+        layer_patch: Dict[int, torch.Tensor] = {}
         hidden_states = outputs.hidden_states or ()
         if self.cfg.layers:
             for one_based in self.cfg.layers:
@@ -110,12 +112,16 @@ class FrozenDINOv2Extractor(nn.Module):
                 if idx < 0 or idx >= len(hidden_states):
                     continue
                 layer_cls[idx] = hidden_states[idx][:, 0, :]
+                if self.cfg.return_patch_layers:
+                    layer_patch[idx] = hidden_states[idx][:, 1:, :]
         out: Dict[str, torch.Tensor] = {
             "cls_final": F.normalize(last[:, 0, :], dim=-1),
             "patch_tokens_final": last[:, 1:, :],
         }
         if layer_cls:
             out["layer_cls"] = layer_cls
+        if self.cfg.return_patch_layers:
+            out["layer_patch"] = layer_patch
         return out
 
     @torch.inference_mode()
@@ -125,6 +131,7 @@ class FrozenDINOv2Extractor(nn.Module):
 
         out: Dict[str, torch.Tensor] = {}
         layer_cls: Dict[int, torch.Tensor] = {}
+        layer_patch: Dict[int, torch.Tensor] = {}
         if self.cfg.layers:
             idxs = self._to_layer_indices_0based(self.cfg.layers)
             blocks = self.model.get_intermediate_layers(
@@ -135,8 +142,10 @@ class FrozenDINOv2Extractor(nn.Module):
                 norm=True,
             )
             for one_based, block_out in zip(self.cfg.layers, blocks):
-                cls_tok = block_out[1]
+                patch_tok, cls_tok = block_out[0], block_out[1]
                 layer_cls[int(one_based)] = cls_tok
+                if self.cfg.return_patch_layers:
+                    layer_patch[int(one_based)] = patch_tok
 
         tokens = self._forward_final_tokens(x)
         cls = tokens[:, 0, :]
@@ -145,6 +154,8 @@ class FrozenDINOv2Extractor(nn.Module):
         out["patch_tokens_final"] = patch
         if layer_cls:
             out["layer_cls"] = layer_cls
+        if self.cfg.return_patch_layers:
+            out["layer_patch"] = layer_patch
         return out
 
     @torch.inference_mode()

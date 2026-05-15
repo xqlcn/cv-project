@@ -25,6 +25,7 @@ class CLIPExtractorConfig:
     layers: Optional[List[int]] = (
         None  # 1-based hidden_states index (HF); ignored for OpenCLIP
     )
+    return_patch_layers: bool = False
 
 
 class FrozenCLIPExtractor(nn.Module):
@@ -107,18 +108,24 @@ class FrozenCLIPExtractor(nn.Module):
         cls = F.normalize(cls, dim=-1)
 
         out_layers: Dict[int, torch.Tensor] = {}
+        out_patches: Dict[int, torch.Tensor] = {}
         if self.cfg.layers:
             for lb in self.cfg.layers:
                 if lb < 0 or lb >= len(hs):
                     continue
                 h = hs[lb]
                 out_layers[int(lb)] = h[:, 0, :]
+                if self.cfg.return_patch_layers:
+                    out_patches[int(lb)] = h[:, 1:, :]
 
-        return {
+        result: Dict[str, torch.Tensor] = {
             "cls_final": cls,
             "patch_tokens_final": patch,
             "layer_cls": out_layers,
         }
+        if self.cfg.return_patch_layers:
+            result["layer_patch"] = out_patches
+        return result
 
     @torch.inference_mode()
     def extract_paths(

@@ -1,0 +1,69 @@
+defaults:
+  - exp1_main
+  - _self_
+
+experiment:
+  name: exp1_dense
+  description: Canonical Experiment 1 dense patch-depth / patch-normal sub-study.
+
+paths:
+  exp1_root: ${paths.project_root}/data/exp1_dense
+  probe_output_dir: ${paths.project_root}/outputs/exp1_dense/probes
+  results_dir: ${paths.project_root}/outputs/exp1_dense/results
+  figures_dir: ${paths.project_root}/outputs/exp1_dense/figures
+  logs_dir: ${paths.project_root}/outputs/exp1_dense/logs
+
+assets:
+  max_objects_per_category: 20
+  min_objects_per_category: 20
+
+render_plan:
+  pose_samples_per_object: 3
+  sampled:
+    camera_distance: 1.9
+    camera_distances: null
+
+models:
+  enabled: ["clip_vit_b16", "dinov2_vit_b"]
+  dense_enabled: ["clip_vit_b16", "dinov2_vit_b"]
+  layers: ["final", "layer8"]
+  dense_layers: ["final", "layer8"]
+
+features:
+  batch_size: 48
+  num_workers: 4
+  use_amp: true
+
+tasks:
+  enabled:
+    - dense_surface_normal_patches
+    - relative_depth_regions
+    - dense_depth_patches
+
+probe:
+  dense_surface_normal:
+    task: dense_surface_normal_patches
+    epochs: 20
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    use_layernorm: true
+    scheduler: cosine_warmup
+    warmup_epochs: 2
+    monitor: val_angular_error_deg_mean
+    evaluation:
+      within_texture: true
+      cross_texture: false
+  dense_depth:
+    task: dense_depth_patches
+    epochs: 20
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    use_layernorm: true
+    scheduler: cosine_warmup
+    warmup_epochs: 2
+    monitor: val_ssi_l1_mean
+    evaluation:
+      within_texture: true
+      cross_texture: false

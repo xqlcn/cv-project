@@ -19,6 +19,8 @@ os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_ROOT / "xdg"))
 import matplotlib
 import pandas as pd
 
+from exp1.evaluation.comparisons import metric_direction
+
 
 def _slug(value: object) -> str:
     text = str(value).strip().lower()
@@ -54,6 +56,18 @@ def _selected_splits(
     return ["test"] if "test" in available else available
 
 
+def _selected_metrics(
+    results: pd.DataFrame, metrics: Optional[Iterable[str]]
+) -> set[str]:
+    if metrics is not None:
+        return {str(metric) for metric in metrics}
+    return {
+        str(metric)
+        for metric in results["metric"].dropna().unique()
+        if metric_direction(str(metric)) is not None
+    }
+
+
 def plot_layerwise_metrics(
     results: pd.DataFrame,
     output_dir: Union[str, Path],
@@ -71,11 +85,7 @@ def plot_layerwise_metrics(
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     df = df.dropna(subset=["value"])
     split_values = _selected_splits(df, splits)
-    metric_values = (
-        {str(metric) for metric in metrics}
-        if metrics is not None
-        else {str(metric) for metric in df["metric"].unique()}
-    )
+    metric_values = _selected_metrics(df, metrics)
     df = df[
         df["split"].astype(str).isin(split_values)
         & df["metric"].astype(str).isin(metric_values)
@@ -126,13 +136,14 @@ def plot_texture_drops(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     df = drops.copy()
-    if splits is not None:
-        df = df[df["split"].astype(str).isin({str(split) for split in splits})]
+    split_values = _selected_splits(df, splits)
+    df = df[df["split"].astype(str).isin(split_values)]
 
     paths: list[Path] = []
     plt = _pyplot()
     for keys, group in df.groupby(["task", "split", "metric"], dropna=False):
         task, split, metric = [str(value) for value in keys]
+        group = group.sort_values(["model", "layer", "comparison_texture"])
         labels = [
             f"{row.model}\n{row.layer}\n{row.comparison_texture}"
             for row in group.itertuples()
@@ -142,7 +153,7 @@ def plot_texture_drops(
         ax.axhline(0.0, color="black", linewidth=0.8)
         ax.set_xticks(range(len(labels)))
         ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-        ax.set_ylabel("Texture drop")
+        ax.set_ylabel("Texture drop (positive = worse)")
         ax.set_title(f"{task} | {split} | {metric}")
         fig.tight_layout()
         path = (
