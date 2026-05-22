@@ -1,4 +1,4 @@
-"""Train a linear probe on saved features (Hydra)."""
+"""Train a multiclass linear probe on ModelNet40 rendered-view features."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
 import torch
+import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
@@ -17,9 +18,7 @@ from tqdm import tqdm
 
 from src.datasets.feature_dataset import FeatureProbeDataset
 from src.models.linear_probe import LinearProbe, ProbeConfig
-from src.training.losses import probe_loss_binary
 from src.utils.io import ensure_dir
-from src.utils.metrics import binary_classification_metrics
 from src.utils.seed import seed_worker, set_seed
 
 
@@ -44,21 +43,22 @@ def _load_feature_index(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def _filter_chirality(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    out = []
+def _filter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
     for r in rows:
-        if r.get("sample_kind") not in {"chirality_original", "chirality_mirror"}:
-            continue
-        label = int(r["chirality_label"])
-        if label < 0:
+        if "category_id" not in r:
             continue
         row = dict(r)
-        row["label"] = label
+        row["label"] = int(r["category_id"])
         out.append(row)
     return out
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="clip_probe")
+def _acc(logits: torch.Tensor, y: torch.Tensor) -> float:
+    return float((logits.argmax(dim=1) == y).float().mean().item())
+
+
+@hydra.main(version_base=None, config_path="../../configs", config_name="modelnet_clip")
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     project_root = Path(cfg.paths.project_root).resolve()
@@ -71,12 +71,11 @@ def main(cfg: DictConfig) -> None:
     if not index_path.is_file():
         raise FileNotFoundError(f"Missing feature index: {index_path}. Run extract_features first.")
 
-    rows = _load_feature_index(index_path)
-    rows = _filter_chirality(rows)
+    rows = _filter_rows(_load_feature_index(index_path))
     if not rows:
-        raise RuntimeError("No chirality rows found in feature index (check sample_kind / labels).")
+        raise RuntimeError("No rows with category_id found in features index.")
 
-    limit = cfg.train.limit_samples if "train" in cfg and cfg.train.limit_samples is not None else None
+    limit = OmegaConf.select(cfg, "train.limit_samples")
     if limit is not None:
         rows = rows[: int(limit)]
 
@@ -94,16 +93,15 @@ def main(cfg: DictConfig) -> None:
 
     train_ds = FeatureProbeDataset(train_rows, layer=layer, token_key=token_key)
     val_ds = FeatureProbeDataset(val_rows, layer=layer, token_key=token_key)
-
     x0, _, _ = train_ds[0]
-    input_dim = int(x0.numel())
 
+    n_classes = int(cfg.probe.num_classes)
     probe_cfg = ProbeConfig(
-        input_dim=input_dim,
-        num_outputs=2,
-        task="binary_classification",
+        input_dim=int(x0.numel()),
+        num_outputs=n_classes,
+        task="multiclass",
         use_layernorm=bool(cfg.probe.use_layernorm),
-        logistic=bool(cfg.probe.logistic),
+        logistic=False,
     )
     model = LinearProbe(probe_cfg)
     device = torch.device(cfg.features.device if torch.cuda.is_available() else "cpu")
@@ -140,9 +138,8 @@ def main(cfg: DictConfig) -> None:
         out_dir = project_root / out_dir
     ensure_dir(out_dir)
 
-    best_auroc = -1.0
+    best = -1.0
     best_state = None
-
     for epoch in range(int(cfg.probe.epochs)):
         model.train()
         losses = []
@@ -151,10 +148,10 @@ def main(cfg: DictConfig) -> None:
             yb = yb.to(device)
             opt.zero_grad(set_to_none=True)
             logits = model(xb)
-            loss = probe_loss_binary(logits, yb, logistic=bool(cfg.probe.logistic))
+            loss = F.cross_entropy(logits, yb)
             loss.backward()
             opt.step()
-            losses.append(loss.item())
+            losses.append(float(loss.item()))
 
         model.eval()
         all_logits = []
@@ -165,25 +162,21 @@ def main(cfg: DictConfig) -> None:
                 logits = model(xb)
                 all_logits.append(logits.cpu())
                 all_labels.append(yb)
-        logits_cat = torch.cat(all_logits, dim=0)
-        labels_cat = torch.cat(all_labels, dim=0)
-        metrics = binary_classification_metrics(logits_cat, labels_cat)
-        print(
-            f"epoch={epoch} train_loss={sum(losses)/max(1,len(losses)):.4f} "
-            f"val_acc={metrics['accuracy']:.4f} val_auroc={metrics['auroc']:.4f} val_f1={metrics['f1']:.4f}"
-        )
-
-        score = metrics["auroc"] if metrics["auroc"] == metrics["auroc"] else metrics["accuracy"]
-        if score > best_auroc:
-            best_auroc = score
+        lcat = torch.cat(all_logits, dim=0)
+        ycat = torch.cat(all_labels, dim=0)
+        acc = _acc(lcat, ycat)
+        print(f"epoch={epoch} train_loss={sum(losses)/max(1,len(losses)):.4f} val_acc={acc:.4f}")
+        if acc > best:
+            best = acc
             best_state = {k: v.cpu() for k, v in model.state_dict().items()}
 
     if best_state is not None:
-        ckpt_path = out_dir / "linear_probe.pt"
+        ckpt_path = out_dir / "linear_probe_modelnet40.pt"
         torch.save(
             {
                 "state_dict": best_state,
                 "probe_cfg": asdict(probe_cfg),
+                "best_val_acc": best,
                 "train_config": OmegaConf.to_container(cfg, resolve=True),
             },
             ckpt_path,
